@@ -1,1 +1,2 @@
-from .accumulate import MeanAccumulator, VarAccumulator, DecAccumulator
+from .accumulate import DecAccumulator, MeanAccumulator, VarAccumulator
+from .measure import variability
