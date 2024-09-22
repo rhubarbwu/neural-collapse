@@ -7,6 +7,18 @@ from torch import Tensor
 from .util import inner_product, normalize
 
 
+def agreement_rate(
+    Ns: Tensor, hits: Tensor = None, misses: Tensor = None
+) -> Union[Tensor, float]:
+    if hits is None and misses and misses.shape == Ns.shape:
+        hits = Ns - misses
+
+    if hits and hits.shape == Ns.shape:
+        return (hits / Ns).mean()
+
+    return None
+
+
 class NeuralCollapse:
     def __init__(self, M: Tensor, mG: Tensor, patch_size: int = None):
         self.K, self.D = M.shape
@@ -22,25 +34,19 @@ class NeuralCollapse:
         return pt.trace(ratio_prod)  # (1)
 
     def means_norms(
-        self, dim_norm: bool = False, log: bool = False
+        self,
     ) -> Union[Tensor, float]:
-        norms = self.M_centred.norm(dim=-1) ** 2  # K
-        if dim_norm:
-            norms /= self.D**0.5
-        if log:
-            norms = norms.log()
-        return norms
+        return self.M_centred.norm(dim=-1) ** 2  # (K)
 
     def interference(self) -> Tensor:
-        M_diff = self.M - self.mG
-        return inner_product(normalize(M_diff), self.patch_size)
+        return inner_product(normalize(self.M_centred), self.patch_size)  # (K,K)
 
     def _structure_error(self, Q: Tensor) -> Union[Tensor, float]:
-        outer = Q @ self.M_centred.mT
+        outer = Q @ self.M_centred.mT  # (K,K)
         outer /= pt.frobenius_norm(outer)
 
         K = self.K
-        ideal = pt.eye(K) - pt.ones((K, K)) / K / pt.sqrt(K - 1)
+        ideal = (pt.eye(K) - pt.ones(K, K) / K) / pt.sqrt(K - 1)  # (K,K)
 
         return pt.frobenius_norm(outer - ideal)
 
@@ -49,11 +55,3 @@ class NeuralCollapse:
 
     def alignment_error(self, W: Tensor) -> Union[Tensor, float]:
         return self._structure_error(self.W)
-
-    def decision_error(
-        self, Ns: Tensor, hits: Tensor = None, misses: Tensor = None
-    ) -> Union[Tensor, float]:
-        if misses and misses.shape == (self.K):
-            return (misses / Ns).mean()
-
-        return ((Ns - hits) / Ns).mean()

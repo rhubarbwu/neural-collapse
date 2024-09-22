@@ -2,6 +2,7 @@ from abc import ABCMeta, abstractmethod
 from typing import List, Tuple, Union
 
 import torch as pt
+from faiss import IndexFlatL2
 from torch import Tensor
 
 from .util import hashify, resolve
@@ -20,7 +21,9 @@ class Accumulator(metaclass=ABCMeta):
         self.ctype, self.dtype, self.device = ctype, dtype, device
         self.n_samples = pt.zeros(self.n_classes, dtype=ctype).to(device)  # (K)
 
-    def filter_indices_by_n_samples(self, minimum: int = 0, maximum: int = None):
+    def filter_indices_by_n_samples(
+        self, minimum: int = 0, maximum: int = None
+    ) -> Union[Tensor, float]:
         idxs = self.n_samples.squeeze() >= minimum
         assert pt.all(minimum <= self.n_samples[idxs])
         if maximum:
@@ -31,7 +34,7 @@ class Accumulator(metaclass=ABCMeta):
 
         return filtered
 
-    def class_idxs(self, X: Tensor, Y: Tensor):
+    def class_idxs(self, X: Tensor, Y: Tensor) -> Union[Tensor, float]:
         Y = Y.squeeze()
         assert X.shape[0] == Y.shape[0]
         Y_range = pt.arange(self.n_classes, dtype=self.ctype)
@@ -100,7 +103,15 @@ class DecAccumulator(Accumulator):
         super().__init__(*args, **kwargs)
         self.hash_M = None if M is None else hashify(M)
         self.hash_W = None if W is None else hashify(W)
+        self.index = None
         self.totals = pt.zeros(self.n_classes, dtype=self.ctype).to(self.device)
+
+    def create_index(self, M: Tensor):
+        self.hash_M = resolve(self.hash_M, hashify(M))
+        assert self.hash_M
+
+        self.index = IndexFlatL2(self.d_vectors)
+        self.index.add(M.cpu().numpy())
 
     def accumulate(
         self, X: Tensor, Y: Tensor, M: Tensor, W: Tensor
@@ -114,10 +125,14 @@ class DecAccumulator(Accumulator):
         assert M.shape == W.shape == (self.n_classes, self.d_vectors)
 
         # NCC classifier decisions
-        dots = pt.inner(X, M)  # (B,K)
-        feats, centre = pt.norm(X, dim=-1) ** 2, pt.norm(M, dim=-1) ** 2  # (B), (K)
-        dists = feats.unsqueeze(1) + centre.unsqueeze(0) - 2 * dots  # (B,K)
-        Y_ncc = dists.argmin(dim=-1)  # (B)
+        if self.index:  # fast branch, using FAISS index
+            _, I = self.index.search(X.cpu().numpy(), 1)
+            Y_ncc = pt.tensor(I).to(self.device).squeeze()  # (B)
+        else:
+            dots = pt.inner(X, M)  # (B,K)
+            feats, centre = pt.norm(X, dim=-1) ** 2, pt.norm(M, dim=-1) ** 2  # (B), (K)
+            dists = feats.unsqueeze(1) + centre.unsqueeze(0) - 2 * dots  # (B,K)
+            Y_ncc = dists.argmin(dim=-1)  # (B)
 
         # linear classifier decisions
         Y_lin = (X @ W.mT).argmax(dim=-1)  # (B)
