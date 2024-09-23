@@ -1,3 +1,4 @@
+from math import sqrt
 from typing import Union
 
 import torch as pt
@@ -7,9 +8,7 @@ from torch import Tensor
 from .util import inner_product, normalize
 
 
-def agreement_rate(
-    Ns: Tensor, hits: Tensor = None, misses: Tensor = None
-) -> Union[Tensor, float]:
+def agreement(Ns: Tensor, hits: Tensor = None, misses: Tensor = None) -> Tensor:
     if hits is None and misses and misses.shape == Ns.shape:
         hits = Ns - misses
 
@@ -25,33 +24,29 @@ class NeuralCollapse:
         self.M_centred = M - mG
         self.patch_size = patch_size
 
-    def variability(self, V: Tensor) -> Union[Tensor, float]:
-        M_diff = self.M - self.mG  # (K,D)
-        cov_inter = M_diff.mT @ M_diff / self.D  # (D,D)
-        cov_intra = pt.outer(V, V)  # (D,D)
-        ratio_prod = la.pinv(cov_inter) @ cov_intra  # (D,D)
+    def variability(self, cov_intra: Tensor) -> float:
+        cov_inter = self.M_centred.mT @ self.M_centred / self.D  # (D,D)
+        ratio_prod = la.pinv(cov_inter) @ cov_intra.to(cov_inter.device)  # (D,D)
 
-        return pt.trace(ratio_prod)  # (1)
+        return pt.trace(ratio_prod).item()  # (1), divide by N?
 
-    def means_norms(
-        self,
-    ) -> Union[Tensor, float]:
+    def means_norms(self) -> Tensor:
         return self.M_centred.norm(dim=-1) ** 2  # (K)
 
     def interference(self) -> Tensor:
         return inner_product(normalize(self.M_centred), self.patch_size)  # (K,K)
 
-    def _structure_error(self, Q: Tensor) -> Union[Tensor, float]:
-        outer = Q @ self.M_centred.mT  # (K,K)
-        outer /= pt.frobenius_norm(outer)
+    def _structure_error(self, Q: Tensor) -> Tensor:
+        outer = Q.to(self.M_centred.device) @ self.M_centred.mT  # (K,K)
+        outer /= la.matrix_norm(outer)
 
         K = self.K
-        ideal = (pt.eye(K) - pt.ones(K, K) / K) / pt.sqrt(K - 1)  # (K,K)
+        ideal = (pt.eye(K) - pt.ones(K, K) / K) / sqrt(K - 1)  # (K,K)
 
-        return pt.frobenius_norm(outer - ideal)
+        return la.matrix_norm(outer - ideal.to(outer.device))
 
-    def simplex_etf_error(self) -> Union[Tensor, float]:
-        return self._structure_error(self.M)
+    def simplex_etf_error(self) -> float:
+        return self._structure_error(self.M_centred).item()
 
-    def alignment_error(self, W: Tensor) -> Union[Tensor, float]:
-        return self._structure_error(self.W)
+    def alignment_error(self, W: Tensor) -> float:
+        return self._structure_error(W).item()
