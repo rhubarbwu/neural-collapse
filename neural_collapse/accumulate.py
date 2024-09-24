@@ -78,7 +78,34 @@ class MeanAccumulator(Accumulator):
         return self.n_samples, self.totals
 
 
-class VarAccumulator(Accumulator):
+class CovarAccumulator(Accumulator):
+    def __init__(self, *args, M: Tensor = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        D, dtype, device = self.d_vectors, self.dtype, self.device
+        self.hash_M = None if M is None else hashify(M)
+        self.totals = pt.zeros(D, D, dtype=dtype).to(device)
+
+    def accumulate(self, X: Tensor, Y: Tensor, M: Tensor) -> Tuple[Tensor, Tensor]:
+        self.hash_M = resolve(self.hash_M, hashify(M))
+        assert self.hash_M
+
+        M = M.to(self.device, self.dtype)
+        assert M.shape == (self.n_classes, self.d_vectors)
+
+        self.class_idxs(X, Y)
+        diff = X.to(self.device) - M[Y]  # (B,D)
+        self.totals += diff.mT @ diff  # (D,D)
+
+        return self.n_samples, self.totals
+
+    def compute(
+        self, idxs: List[int] = None, weighted: bool = False
+    ) -> Tuple[Tensor, Tensor]:
+        dtype = self.dtype
+        return self.totals / (self.n_samples.sum() + pt.finfo(dtype).eps).to(dtype)
+
+
+class VarNormAccumulator(Accumulator):
     def __init__(self, *args, M: Tensor = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.hash_M = None if M is None else hashify(M)
