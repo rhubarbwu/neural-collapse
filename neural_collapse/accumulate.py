@@ -19,16 +19,16 @@ class Accumulator(metaclass=ABCMeta):
     ):
         self.n_classes, self.d_vectors = n_classes, d_vectors
         self.ctype, self.dtype, self.device = ctype, dtype, device
-        self.n_samples = pt.zeros(self.n_classes, dtype=ctype).to(device)  # (K)
+        self.ns_samples = pt.zeros(self.n_classes, dtype=ctype).to(device)  # (K)
 
     def filter_indices_by_n_samples(
         self, minimum: int = 0, maximum: int = None
     ) -> Union[Tensor, float]:
-        idxs = self.n_samples.squeeze() >= minimum
-        assert pt.all(minimum <= self.n_samples[idxs])
+        idxs = self.ns_samples.squeeze() >= minimum
+        assert pt.all(minimum <= self.ns_samples[idxs])
         if maximum:
-            idxs &= self.n_samples.squeeze() < maximum
-            assert pt.all(self.n_samples[idxs] < maximum)
+            idxs &= self.ns_samples.squeeze() < maximum
+            assert pt.all(self.ns_samples[idxs] < maximum)
 
         filtered = idxs.nonzero().squeeze()
 
@@ -39,7 +39,7 @@ class Accumulator(metaclass=ABCMeta):
         assert X.shape[0] == Y.shape[0]
         Y_range = pt.arange(self.n_classes, dtype=self.ctype)
         idxs = (Y[:, None] == Y_range.to(Y.device)).to(self.device)
-        self.n_samples += pt.sum(idxs, dim=0, dtype=self.ctype)[:, None].squeeze()
+        self.ns_samples += pt.sum(idxs, dim=0, dtype=self.ctype)[:, None].squeeze()
         return idxs
 
     def compute(
@@ -47,15 +47,15 @@ class Accumulator(metaclass=ABCMeta):
     ) -> Tuple[Tensor, Tensor]:
         eps = pt.finfo(self.dtype).eps
 
-        n_samples, totals = self.n_samples, self.totals  # (K), (K,D)
+        ns_samples, totals = self.ns_samples, self.totals  # (K), (K,D)
         if idxs is not None:
-            n_samples, totals = n_samples[idxs], totals[idxs]  # (K'), (K',D)
+            ns_samples, totals = ns_samples[idxs], totals[idxs]  # (K'), (K',D)
         if len(self.totals.shape) > 1:
-            n_samples = n_samples.unsqueeze(1)
+            ns_samples = ns_samples.unsqueeze(1)
 
-        avg = totals / (n_samples + eps).to(self.dtype)  # (K, D)
+        avg = totals / (ns_samples + eps).to(self.dtype)  # (K, D)
         if weighted:
-            avg_G = n_samples.to(self.dtype) @ avg / (n_samples.sum() + eps)  # (D)
+            avg_G = ns_samples.to(self.dtype) @ avg / (ns_samples.sum() + eps)  # (D)
         else:
             avg_G = avg.mean(dim=0)  # (D)
 
@@ -75,7 +75,7 @@ class MeanAccumulator(Accumulator):
     def accumulate(self, X: Tensor, Y: Tensor) -> Tuple[Tensor, Tensor]:
         idxs = self.class_idxs(X, Y).mT.to(self.dtype)  # (K,B)
         self.totals += idxs @ X.to(device=self.device, dtype=self.dtype)  # (K,D)
-        return self.n_samples, self.totals
+        return self.ns_samples, self.totals
 
 
 class CovarAccumulator(Accumulator):
@@ -96,13 +96,14 @@ class CovarAccumulator(Accumulator):
         diff = X.to(self.device) - M[Y]  # (B,D)
         self.totals += diff.mT @ diff  # (D,D)
 
-        return self.n_samples, self.totals
+        return self.ns_samples, self.totals
 
-    def compute(
-        self, idxs: List[int] = None, weighted: bool = False
-    ) -> Tuple[Tensor, Tensor]:
-        dtype = self.dtype
-        return self.totals / (self.n_samples.sum() + pt.finfo(dtype).eps).to(dtype)
+    def compute(self, idxs: List[int] = None) -> Tuple[Tensor, Tensor]:
+        ns_samples, totals = self.ns_samples, self.totals  # (K), (K,D)
+        if idxs is not None:
+            ns_samples, totals = ns_samples[idxs], totals[idxs]
+
+        return totals / (ns_samples.sum() + pt.finfo(self.dtype).eps).to(self.dtype)
 
 
 class VarNormAccumulator(Accumulator):
@@ -122,7 +123,7 @@ class VarNormAccumulator(Accumulator):
         diffs_sq = (X.to(self.device) - M[Y]) ** 2  # (B,D)
         self.totals += (idxs @ diffs_sq).sum(dim=-1)  # (K,D)
 
-        return self.n_samples, self.totals
+        return self.ns_samples, self.totals
 
 
 class DecAccumulator(Accumulator):

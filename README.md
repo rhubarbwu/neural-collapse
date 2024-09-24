@@ -4,7 +4,7 @@
 
 ```sh
 # install from remote
-pip install git+https://github.com/username/repository.git
+pip install git+https://github.com/rhubarbwu/neural-collapse.git
 
 # install locally
 pip install -e .
