@@ -1,19 +1,52 @@
 from math import sqrt
-from typing import Union
+from typing import Tuple
 
 import torch as pt
 import torch.linalg as la
 from torch import Tensor
 
-from .util import inner_product, normalize
+from .util import inner_product, normalize, patching, symm_reduce
 
 
-def variability(M: Tensor, V_intra: Tensor, m_G: Tensor = 0, N: int = 1) -> float:
+def variability_pinv(M: Tensor, V_intra: Tensor, m_G: Tensor = 0, N: int = 1) -> float:
     D, M_centred = M.shape[-1], M - m_G
     V_intra = M_centred.mT @ M_centred / D  # (D,D)
     ratio_prod = la.pinv(V_intra) @ V_intra.to(V_intra.device)  # (D,D)
 
     return pt.trace(ratio_prod).item() / N  # (1)
+
+
+def class_dist_norm_var(
+    M: Tensor,
+    V: Tensor,
+    patch_size: int = 1,
+) -> Tensor:
+    """Kernel grid of Class-Distance Normalized Variance (CDNV)
+    Galanti et al. (2021): https://arxiv.org/abs/2112.15121
+    """
+    V = V.view(-1, 1)
+    bundled = pt.cat((M, V), dim=1)
+
+    def kernel(patch_i, patch_j):
+        vars_i, vars_j = patch_i[:, -1], patch_j[:, -1]
+        var_avgs = (vars_i.unsqueeze(1) + vars_j).squeeze() / 2
+
+        M_i, M_j = patch_i[:, :-1], patch_j[:, :-1]
+
+        M_diff = M_i.unsqueeze(1) - M_j
+        inner = pt.sum(M_diff * M_diff, dim=-1)
+        return var_avgs.squeeze(0) / inner / inner
+
+    return patching(bundled, kernel, patch_size)
+
+
+def variability_cdnv(M: Tensor, V: Tensor, patch_size: int = 1) -> float:
+    """Average of Class-Distance Normalized Variance (CDNV)
+    Galanti et al. (2021): https://arxiv.org/abs/2112.15121
+    """
+    kernel_grid = class_dist_norm_var(M, V, patch_size)
+    avg = symm_reduce(kernel_grid, pt.sum)
+    return avg
 
 
 def mean_norms(M: Tensor, m_G: Tensor = 0):
