@@ -34,7 +34,7 @@ def inner_product(data: Tensor, patch_size: int = None) -> Tensor:
     return kernel_grid
 
 
-def symm_reduce(data: Tensor, reduce=pt.sum) -> float:
+def symm_reduce(data: Tensor, reduce:callable=pt.sum) -> float:
     N = data.shape[0]
     total = 0
 
