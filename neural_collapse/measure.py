@@ -1,59 +1,97 @@
 from math import sqrt
-from typing import Tuple
 
 import torch as pt
 import torch.linalg as la
 from torch import Tensor
 
-from .util import inner_product, normalize, patching, symm_reduce
+from .util import inner_product, normalize, symm_reduce, tiling
 
 
 def class_dist_norm_var(
-    M: Tensor,
     V: Tensor,
-    patch_size: int = 1,
+    M: Tensor,
+    tile_size: int = None,
 ) -> Tensor:
-    """Kernel grid of class-distance normalized variance (CDNV).
+    """Compute the matrix grid of class-distance normalized variances (CDNV).
+    This metric reflects pairwise variability adjusted for mean distances.
     Galanti et al. (2021): https://arxiv.org/abs/2112.15121
+
+    Arguments:
+        V (Tensor): The matrix of within-class variances for the classes.
+        M (Tensor): The matrix of feature (or class mean) embeddings.
+        tile_size (int, optional): Size of the tile for kernel computation.
+            Set tile_size << K to avoid OOM. Defaults to None.
+
+    Returns:
+        Tensor: A tensor representing the matrix grid of pairwise CDNVs.
     """
     V = V.view(-1, 1)
     bundled = pt.cat((M, V), dim=1)
 
-    def kernel(patch_i, patch_j):
-        vars_i, vars_j = patch_i[:, -1], patch_j[:, -1]
+    def kernel(tile_i, tile_j):
+        vars_i, vars_j = tile_i[:, -1], tile_j[:, -1]
         var_avgs = (vars_i.unsqueeze(1) + vars_j).squeeze() / 2
 
-        M_i, M_j = patch_i[:, :-1], patch_j[:, :-1]
+        M_i, M_j = tile_i[:, :-1], tile_j[:, :-1]
 
         M_diff = M_i.unsqueeze(1) - M_j
         inner = pt.sum(M_diff * M_diff, dim=-1)
         return var_avgs.squeeze(0) / inner
 
-    return patching(bundled, kernel, patch_size)
+    return tiling(bundled, kernel, tile_size)
 
 
-def variability_cdnv(M: Tensor, V: Tensor, patch_size: int = 1) -> float:
-    """Average class-distance normalized variance (CDNV).
+def variability_cdnv(V: Tensor, M: Tensor, tile_size: int = None) -> float:
+    """Compute the average class-distance normalized variances (CDNV).
+    This metric reflects pairwise variability adjusted for mean distances.
     Galanti et al. (2021): https://arxiv.org/abs/2112.15121
+
+    Arguments:
+        V (Tensor): The matrix of within-class variances for the classes.
+        M (Tensor): The matrix of feature (or class mean) embeddings.
+        tile_size (int, optional): Size of the tile for kernel computation.
+            Set tile_size << K to avoid OOM. Defaults to None.
+
+    Returns:
+        float: The average CDNVs across all class pairs.
     """
-    kernel_grid = class_dist_norm_var(M, V, patch_size)
+    kernel_grid = class_dist_norm_var(V, M, tile_size)
     avg = symm_reduce(kernel_grid, pt.sum)
     return avg
 
 
-def variability_ratio(M: Tensor, V_intra: Tensor, m_G: Tensor = 0) -> float:
-    """Ratio of traces of (co)variances.
+def variability_ratio(V_intra: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
+    """Compute the ratio of traces of (co)variances: within-class (intra)
+    variance to between-class (inter) variance.
     Hui et al. (2022): https://arxiv.org/abs/2202.08384
     Tirer et al. (2023): https://proceedings.mlr.press/v202/tirer23a
+
+    Arguments:
+        V_intra (Tensor): The within-class variance matrix.
+        M (Tensor): The matrix of feature (or class mean) embeddings.
+        m_G (Tensor, optional): The global mean vector. Defaults to 0.
+
+    Returns:
+        float: The ratio of traces of (co)variances.
     """
     (_, D), M_centred = M.shape, M - m_G
     V_inter = M_centred.mT @ M_centred / D  # (D,D)
     return pt.trace(V_intra) / pt.trace(V_inter)  # (1)
 
 
-def variability_pinv(M: Tensor, V_intra: Tensor, m_G: Tensor = 0) -> float:
-    """Within-class variability collapse.
-    Papyan, Han, & Donoho (2020): https://www.pnas.org/doi/full/10.1073/pnas.2015509117
+def variability_pinv(V_intra: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
+    """Compute within-class variability collapse: trace of the product
+    between the within-class (intra) variance and pseudo-inverse of the
+    between-class (inter) variance.
+    Papyan et al. (2020): https://doi.org/10.1073/pnas.2015509117
+
+    Arguments:
+        V_intra (Tensor): The within-class variance matrix.
+        M (Tensor): The matrix of feature (or class mean) embeddings.
+        m_G (Tensor, optional): The global mean vector. Defaults to 0.
+
+    Returns:
+        float: The computed within-class variability collapse value.
     """
     (K, D), M_centred = M.shape, M - m_G
     V_inter = M_centred.mT @ M_centred / D  # (D,D)
@@ -62,41 +100,112 @@ def variability_pinv(M: Tensor, V_intra: Tensor, m_G: Tensor = 0) -> float:
     return pt.trace(ratio_prod).item() / K  # (1)
 
 
-def mean_norms(M: Tensor, m_G: Tensor = 0):
+def mean_norms(M: Tensor, m_G: Tensor = 0) -> Tensor:
+    """Compute the squared norms of embeddings (centred by global mean).
+
+    Arguments:
+        M (Tensor): The matrix of feature (or class mean) embeddings.
+        m_G (Tensor, optional): The global mean vector. Defaults to 0.
+
+    Returns:
+        Tensor: A vector containing the squared norms for each class.
+    """
     M_centred = M - m_G
     return M_centred.norm(dim=-1) ** 2  # (K)
 
 
-def interference(M: Tensor, m_G: Tensor = 0, patch_size: int = None) -> Tensor:
+def interference(M: Tensor, m_G: Tensor = 0, tile_size: int = None) -> Tensor:
+    """Compute the pairwise interference grid between embeddings.
+
+    Arguments:
+        M (Tensor): The matrix of feature (or class mean) embeddings.
+        m_G (Tensor, optional): The global mean vector. Defaults to 0.
+        tile_size (int, optional): Size of the tile for kernel computation.
+            Set tile_size << K to avoid OOM. Defaults to None.
+
+    Returns:
+        Tensor: A matrix representing pairwise interferences.
+    """
     M_centred = M - m_G
-    return inner_product(normalize(M_centred), patch_size)  # (K,K)
+    return inner_product(normalize(M_centred), tile_size)  # (K,K)
 
 
-def _structure_error(A: Tensor, B: Tensor) -> Tensor:
+def _structure_error(A: Tensor, B: Tensor) -> float:
+    """Compute the error between the cross-class coherence structure formed
+    by two sets of embeddings and the ideal simplex equiangular tight frame
+    (ETF), expressed as the matrix norm of their difference.
+
+    Arguments:
+        A (Tensor): The first tensor for comparison.
+        B (Tensor): The second tensor for comparison.
+
+    Returns:
+        float: Scalar error of excess incoherence from simplex ETF.
+    """
     (K, _) = A.shape
     ideal = (pt.eye(K) - pt.ones(K, K) / K) / sqrt(K - 1)  # (K,K)
 
-    outer = B.to(A.device) @ A.mT  # (K,K)
-    outer /= la.matrix_norm(outer)
+    struct = B.to(A.device) @ A.mT  # (K,K)
+    struct /= la.matrix_norm(struct)
 
-    return la.matrix_norm(outer - ideal.to(outer.device))
+    return la.matrix_norm(struct - ideal.to(struct.device)).item()
 
 
 def simplex_etf_error(M: Tensor, m_G: Tensor = 0) -> float:
+    """Compute the excess cross-class incoherence within a set of (mean)
+    embeddings, relative to the ideal simplex ETF.
+
+    Arguments:
+        M (Tensor): The matrix of feature (or class mean) embeddings.
+        m_G (Tensor, optional): The global mean vector. Defaults to 0.
+
+    Returns:
+        float: Scalar error of excess incoherence from simplex ETF.
+    """
     M_centred = M - m_G
-    return _structure_error(M_centred, M_centred).item()
+    return _structure_error(M_centred, M_centred)
 
 
 def self_duality_error(W: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
+    """Compute the excess cross-class incoherence between a set of (mean)
+    embeddings and classifiers, relative to the ideal simplex ETF.
+
+    Arguments:
+        W (Tensor): The weight vectors of the classifiers.
+        M (Tensor): The matrix of feature (or class mean) embeddings.
+        m_G (Tensor, optional): The global mean vector. Defaults to 0.
+
+    Returns:
+        float: Scalar error of excess incoherence from simplex ETF.
+    """
     M_centred = M - m_G
-    return _structure_error(M_centred, W).item()
+    return _structure_error(M_centred, W)
 
 
-def clf_ncc_agreement(Ns: Tensor, hits: Tensor = None, misses: Tensor = None) -> Tensor:
+def clf_ncc_agreement(
+    Ns: Tensor, hits: Tensor = None, misses: Tensor = None, weighted: bool = True
+) -> float:
+    """Compute the rate of agreement between the linear and the implicit
+    nearest-class centre (NCC) classifiers: percentage of hits over Ns samples.
+
+    Arguments:
+        Ns (Tensor): Total number of samples for each class.
+        hits (Tensor, optional): Number of hits (lin == ncc) per class.
+        misses (Tensor, optional): Number of misses (lin != ncc) per class.
+        weighted (bool, optional): Whether to weigh class hit rates by numbers
+        of samples. Defaults to True.
+
+    Returns:
+        float: The rate of agreement as a float, or None if an error occurs
+            (e.g. neither hits nor misses given, or shape mismatch)
+    """
     if hits is None and misses and misses.shape == Ns.shape:
         hits = Ns - misses
 
-    if hits and hits.shape == Ns.shape:
-        return (hits / Ns).mean()
+    if not hits or hits.shape != Ns.shape:
+        return None  # something has gone wrong
 
-    return None
+    if weighted:
+        return (hits.sum() / Ns.sum()).item()
+    else:
+        return (hits / Ns).mean().item()

@@ -9,6 +9,32 @@ from .util import hashify, resolve
 
 
 class Accumulator(metaclass=ABCMeta):
+    """Base class for accumulators that track sample counts and totals.
+
+    This abstract class provides the foundation for different types of accumulators
+    that calculate statistics based on input tensors. It manages sample counts
+    for each class and includes methods to filter indices based on sample counts,
+    accumulate data, and compute averages.
+
+    Attributes:
+        n_classes (int): The number of classes.
+        d_vectors (int): The dimensionality of the input vectors.
+        ctype (torch.dtype): The data type for counts.
+        dtype (torch.dtype): The data type for totals and computations.
+        device (Union[str, torch.device]): The device on which tensors are stored.
+        ns_samples (Tensor): A tensor to hold the number of samples for each class.
+
+    Methods:
+        filter_indices_by_n_samples(minimum=0, maximum=None):
+            Filters indices of classes based on a minimum and maximum sample count.
+        class_idxs(X, Y):
+            Returns indices of samples belonging to each class and updates sample counts.
+        compute(idxs=None, weighted=False):
+            Computes average values based on accumulated totals and sample counts.
+        accumulate(*args):
+            Abstract method to be implemented by subclasses to define specific accumulation behavior.
+    """
+
     def __init__(
         self,
         n_classes: int,
@@ -67,6 +93,16 @@ class Accumulator(metaclass=ABCMeta):
 
 
 class MeanAccumulator(Accumulator):
+    """Accumulator that computes mean vectors for each class.
+
+    Inherits from the Accumulator class and accumulates the totals for each class
+    to compute the mean of the input vectors.
+
+    Methods:
+        accumulate(X, Y):
+            Updates the total counts and computes the sum of input vectors for each class.
+    """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         dtype, device = self.dtype, self.device
@@ -79,6 +115,22 @@ class MeanAccumulator(Accumulator):
 
 
 class CovarAccumulator(Accumulator):
+    """Accumulator that computes covariance matrices for each class.
+
+    Inherits from the Accumulator class and accumulates the differences between
+    input vectors and class-specific mean vectors to compute covariance.
+
+    Attributes:
+        hash_M (hash): Hash of the mean vectors for ensuring consistency.
+        totals (Tensor): A tensor to hold the accumulated covariance totals.
+
+    Methods:
+        accumulate(X, Y, M):
+            Updates the totals based on the differences between input vectors and class means.
+        compute(idxs=None):
+            Computes the average covariance matrix based on accumulated totals.
+    """
+
     def __init__(self, *args, M: Tensor = None, **kwargs):
         super().__init__(*args, **kwargs)
         D, dtype, device = self.d_vectors, self.dtype, self.device
@@ -107,6 +159,20 @@ class CovarAccumulator(Accumulator):
 
 
 class VarNormAccumulator(Accumulator):
+    """Accumulator that computes the variance norms for each class.
+
+    Inherits from the Accumulator class and calculates the variance of input vectors
+    relative to class-specific mean vectors.
+
+    Attributes:
+        hash_M (hash): Hash of the mean vectors for ensuring consistency.
+        totals (Tensor): A tensor to hold the accumulated variance totals.
+
+    Methods:
+        accumulate(X, Y, M):
+            Updates the totals based on squared differences between input vectors and class means.
+    """
+
     def __init__(self, *args, M: Tensor = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.hash_M = None if M is None else hashify(M)
@@ -127,6 +193,24 @@ class VarNormAccumulator(Accumulator):
 
 
 class DecAccumulator(Accumulator):
+    """Accumulator that computes decisions from multiple classifiers.
+
+    Inherits from the Accumulator class and integrates results from nearest-class center
+    and linear classifiers to track matches for each class.
+
+    Attributes:
+        hash_M (hash): Hash of the mean vectors for ensuring consistency.
+        hash_W (hash): Hash of the weights for the linear classifier for consistency.
+        index (IndexFlatL2): FAISS index for efficient nearest neighbor searches.
+        totals (Tensor): A tensor to hold the accumulated match counts for each class.
+
+    Methods:
+        create_index(M):
+            Initializes a FAISS index with the provided mean vectors.
+        accumulate(X, Y, M, W):
+            Updates the totals based on matches between the nearest-class center and linear classifiers.
+    """
+
     def __init__(self, *args, M: Tensor = None, W: Tensor = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.hash_M = None if M is None else hashify(M)
