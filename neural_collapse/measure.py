@@ -1,44 +1,12 @@
 from math import sqrt
+from typing import Tuple
 
 import torch as pt
 import torch.linalg as la
 from torch import Tensor
 
-from .util import inner_product, normalize, symm_reduce, tiling
-
-
-def class_dist_norm_var(
-    V: Tensor,
-    M: Tensor,
-    tile_size: int = None,
-) -> Tensor:
-    """Compute the matrix grid of class-distance normalized variances (CDNV).
-    This metric reflects pairwise variability adjusted for mean distances.
-    Galanti et al. (2021): https://arxiv.org/abs/2112.15121
-
-    Arguments:
-        V (Tensor): The matrix of within-class variances for the classes.
-        M (Tensor): The matrix of feature (or class mean) embeddings.
-        tile_size (int, optional): Size of the tile for kernel computation.
-            Set tile_size << K to avoid OOM. Defaults to None.
-
-    Returns:
-        Tensor: A tensor representing the matrix grid of pairwise CDNVs.
-    """
-    V = V.view(-1, 1)
-    bundled = pt.cat((M, V), dim=1)
-
-    def kernel(tile_i, tile_j):
-        vars_i, vars_j = tile_i[:, -1], tile_j[:, -1]
-        var_avgs = (vars_i.unsqueeze(1) + vars_j).squeeze() / 2
-
-        M_i, M_j = tile_i[:, :-1], tile_j[:, :-1]
-
-        M_diff = M_i.unsqueeze(1) - M_j
-        inner = pt.sum(M_diff * M_diff, dim=-1)
-        return var_avgs.squeeze(0) / inner
-
-    return tiling(bundled, kernel, tile_size)
+from .kernels import class_dist_norm_var, log_kernel
+from .util import inner_product, normalize, symm_reduce
 
 
 def variability_cdnv(V: Tensor, M: Tensor, tile_size: int = None) -> float:
@@ -128,6 +96,33 @@ def interference(M: Tensor, m_G: Tensor = 0, tile_size: int = None) -> Tensor:
     """
     M_centred = M - m_G
     return inner_product(normalize(M_centred), tile_size)  # (K,K)
+
+
+def kernel_distances(
+    M: Tensor, m_G: Tensor = 0, kernel: callable = log_kernel, tile_size: int = None
+) -> Tuple[float, float]:
+    """Compute the average and variance of a kernel function on pairwise
+    distances between embeddings. Self-distances are excluded.
+    Liu et al. (2023): https://arxiv.org/abs/2303.06484
+
+    Arguments:
+        M (Tensor): The matrix of feature (or class mean) embeddings.
+        m_G (Tensor, optional): The global mean vector. Defaults to 0.
+        kernel (callable, optional): The kernel with which to compute
+            distances. Defaults to logarithmic inverse distances.
+        tile_size (int, optional): Size of the tile for kernel computation.
+            Set tile_size << K to avoid OOM. Defaults to None.
+    Returns:
+        float: Average of pairwise kernel distances.
+        float: Variance of pairwise kernel distances.
+    """
+    M_centred_normed = normalize(M - m_G)
+
+    grid: Tensor = kernel(M_centred_normed, M, tile_size)
+    avg = symm_reduce(grid, pt.sum)
+    var = symm_reduce(grid, lambda row: pt.sum((row - avg) ** 2))
+
+    return avg, var
 
 
 def _structure_error(A: Tensor, B: Tensor) -> float:

@@ -22,4 +22,5 @@ import neural_collapse as nc
 - [On the Role of Neural Collapse in Transfer Learning](https://arxiv.org/abs/2112.15121)
 - [Neural Collapse: A Review on Modelling Principles and Generalization](https://arxiv.org/abs/2206.04041)
 - [Perturbation Analysis of Neural Collapse](https://proceedings.mlr.press/v202/tirer23a)
+- [Generalizing and Decoupling Neural Collapse via Hyperspherical Uniformity Gap](https://arxiv.org/abs/2303.06484)
 - [Linguistic Collapse: Neural Collapse in (Large) Language Models](https://arxiv.org/abs/2405.17767)
