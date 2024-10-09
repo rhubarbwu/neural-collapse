@@ -15,6 +15,7 @@ setup(
     install_requires=[
         "faiss-gpu",
         "numpy<2",
+        "scipy",
         "torch",
     ],
     classifiers=[

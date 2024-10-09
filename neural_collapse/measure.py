@@ -1,15 +1,19 @@
 from math import sqrt
 from typing import Tuple
 
+import numpy as np
 import torch as pt
 import torch.linalg as la
+from scipy.sparse.linalg import svds
 from torch import Tensor
 
 from .kernels import class_dist_norm_var, log_kernel
 from .util import inner_product, normalize, symm_reduce
 
 
-def variability_cdnv(V: Tensor, M: Tensor, tile_size: int = None) -> float:
+def variability_cdnv(
+    V: Tensor, M: Tensor, dist_exp: float = 1.0, tile_size: int = None
+) -> float:
     """Compute the average class-distance normalized variances (CDNV).
     This metric reflects pairwise variability adjusted for mean distances.
     Galanti et al. (2021): https://arxiv.org/abs/2112.15121
@@ -17,13 +21,17 @@ def variability_cdnv(V: Tensor, M: Tensor, tile_size: int = None) -> float:
     Arguments:
         V (Tensor): The matrix of within-class variances for the classes.
         M (Tensor): The matrix of feature (or class mean) embeddings.
+        dist_exp (int): The power with which to exponentiate the distance
+            normalizer. A greater power further diminishes the contribution of
+            mutual variability between already-disparate classes. Defaults to
+            1, equivalent to the CDNV introduced by Galanti et al. (2021).
         tile_size (int, optional): Size of the tile for kernel computation.
             Set tile_size << K to avoid OOM. Defaults to None.
 
     Returns:
         float: The average CDNVs across all class pairs.
     """
-    kernel_grid = class_dist_norm_var(V, M, tile_size)
+    kernel_grid = class_dist_norm_var(V, M, dist_exp, tile_size)
     avg = symm_reduce(kernel_grid, pt.sum)
     return avg
 
@@ -47,7 +55,9 @@ def variability_ratio(V_intra: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
     return pt.trace(V_intra) / pt.trace(V_inter)  # (1)
 
 
-def variability_pinv(V_intra: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
+def variability_pinv(
+    V_intra: Tensor, M: Tensor, m_G: Tensor = 0, svd: bool = False
+) -> float:
     """Compute within-class variability collapse: trace of the product
     between the within-class (intra) variance and pseudo-inverse of the
     between-class (inter) variance.
@@ -57,14 +67,23 @@ def variability_pinv(V_intra: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
         V_intra (Tensor): The within-class variance matrix.
         M (Tensor): The matrix of feature (or class mean) embeddings.
         m_G (Tensor, optional): The global mean vector. Defaults to 0.
+        svd (bool, optional): Whether to compute Moore-Penrose pseudo-inverse
+            directly. Default is False, using torch.pinv.
 
     Returns:
         float: The computed within-class variability collapse value.
     """
     (K, D), M_centred = M.shape, M - m_G
-    V_inter = M_centred.mT @ M_centred / D  # (D,D)
-    ratio_prod = la.pinv(V_inter) @ V_intra.to(V_inter.device)  # (D,D)
 
+    V_inter = M_centred.mT @ M_centred / D  # (D,D)
+
+    if svd:  # compute MP-inverse directly using SVD
+        V_intra, V_inter = V_intra.cpu().numpy(), V_inter.cpu().numpy()
+        eig_vecs, eig_vals, _ = svds(V_inter, k=K - 1)
+        inv_Sb = eig_vecs @ np.diag(eig_vals ** (-1)) @ eig_vecs.T  # (D,D)
+        return float(np.trace(V_intra @ inv_Sb))
+
+    ratio_prod = la.pinv(V_inter) @ V_intra.to(V_inter.device)  # (D,D)
     return pt.trace(ratio_prod).item() / K  # (1)
 
 
@@ -118,7 +137,7 @@ def kernel_distances(
     """
     M_centred_normed = normalize(M - m_G)
 
-    grid: Tensor = kernel(M_centred_normed, M, tile_size)
+    grid: Tensor = kernel(M_centred_normed, tile_size)
     avg = symm_reduce(grid, pt.sum)
     var = symm_reduce(grid, lambda row: pt.sum((row - avg) ** 2))
 

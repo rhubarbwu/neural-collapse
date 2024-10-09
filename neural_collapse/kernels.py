@@ -9,6 +9,7 @@ from .util import normalize, tiling
 def class_dist_norm_var(
     V: Tensor,
     M: Tensor,
+    dist_exp: float = 1.0,
     tile_size: int = None,
 ) -> Tensor:
     """Compute the matrix grid of class-distance normalized variances (CDNV).
@@ -18,6 +19,10 @@ def class_dist_norm_var(
     Arguments:
         V (Tensor): The matrix of within-class variances for the classes.
         M (Tensor): The matrix of feature (or class mean) embeddings.
+        dist_exp (int): The power with which to exponentiate the distance
+            normalizer. A greater power further diminishes the contribution of
+            mutual variability between already-disparate classes. Defaults to
+            1, equivalent to the CDNV introduced by Galanti et al. (2021).
         tile_size (int, optional): Size of the tile for kernel computation.
             Set tile_size << K to avoid OOM. Defaults to None.
 
@@ -34,14 +39,14 @@ def class_dist_norm_var(
         M_i, M_j = tile_i[:, :-1], tile_j[:, :-1]
 
         M_diff = M_i.unsqueeze(1) - M_j
-        inner = pt.sum(M_diff * M_diff, dim=-1)
-        return var_avgs.squeeze(0) / inner
+        M_diff_norm_sq = pt.sum(M_diff * M_diff, dim=-1)
+        return var_avgs.squeeze(0) / (M_diff_norm_sq**dist_exp)
 
     grid = tiling(bundled, kernel, tile_size)
     return grid
 
 
-def log_kernel(data: Tensor, exponent: int = -1, tile_size: int = 1) -> Tensor:
+def log_kernel(data: Tensor, tile_size: int = None, exponent: int = -1) -> Tensor:
     """Compute the matrix grid of logarithmic distances across vectors.
     Liu et al. (2023): https://arxiv.org/abs/2303.06484
 
@@ -63,7 +68,7 @@ def log_kernel(data: Tensor, exponent: int = -1, tile_size: int = 1) -> Tensor:
     return grid
 
 
-def riesz_kernel(data: Tensor, tile_size: int = 1) -> Tensor:
+def riesz_kernel(data: Tensor, tile_size: int = None) -> Tensor:
     """Compute the matrix grid of Riesz distances across vectors.
     Liu et al. (2023): https://arxiv.org/abs/2303.06484
 
