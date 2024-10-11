@@ -17,9 +17,9 @@ def class_dist_norm_var(
     Galanti et al. (2021): https://arxiv.org/abs/2112.15121
 
     Arguments:
-        V (Tensor): The matrix of within-class variances for the classes.
-        M (Tensor): The matrix of feature (or class mean) embeddings.
-        dist_exp (int): The power with which to exponentiate the distance
+        V (Tensor): Matrix of within-class variance norms.
+        M (Tensor): Matrix of feature (or class mean) embeddings.
+        dist_exp (int): Power with which to exponentiate the distance
             normalizer. A greater power further diminishes the contribution of
             mutual variability between already-disparate classes. Defaults to
             1, equivalent to the CDNV introduced by Galanti et al. (2021).
@@ -46,14 +46,36 @@ def class_dist_norm_var(
     return grid
 
 
-def log_kernel(data: Tensor, tile_size: int = None, exponent: int = -1) -> Tensor:
-    """Compute the matrix grid of logarithmic distances across vectors.
+def inner_product(data: Tensor, tile_size: int = None) -> Tensor:
+    """Compute the inner product of the input tensor or a grid of inner products based on tiles.
+
+    If `tile_size` is not specified, the function calculates the inner product
+    of the input tensor with itself. If a `tile_size` is provided, it computes
+    a grid of inner products over the tiles of the input data.
+
+    Args:
+        data (Tensor): Input tensor for which to compute the inner product.
+        tile_size (int, optional): Size of the tiles for calculating the inner
+            product grid. Set tile_size << K to avoid OOM. Defaults to None.
+
+    Returns:
+        Tensor: Inner product matrix of the input with itself.
+    """
+    if not tile_size:
+        return pt.inner(data, data)
+
+    grid = tiling(data, pt.inner, tile_size)
+    return grid
+
+
+def log_kernel(data: Tensor, exponent: int = -1, tile_size: int = None) -> Tensor:
+    """Compute the grid of (natural) logarithmic distances across vectors.
     Liu et al. (2023): https://arxiv.org/abs/2303.06484
 
     Arguments:
-        data (Tensor): The input data tensor to be processed.
-        exponent (int, optional): The exponent to apply to the distance norm
-            before taking the logarithm. Defaults to -1 (inverse).
+        data (Tensor): Input data tensor across which to apply the kernel.
+        exponent (int, optional): Power with which to exponentiate the
+            distance norm before the logarithm. Defaults to -1 (inverse).
         tile_size (int, optional): Size of the tile for kernel computation.
             Set tile_size << K to avoid OOM. Defaults to None.
     """
@@ -69,11 +91,11 @@ def log_kernel(data: Tensor, tile_size: int = None, exponent: int = -1) -> Tenso
 
 
 def riesz_kernel(data: Tensor, tile_size: int = None) -> Tensor:
-    """Compute the matrix grid of Riesz distances across vectors.
+    """Compute the grid of Riesz distances across vectors.
     Liu et al. (2023): https://arxiv.org/abs/2303.06484
 
     Arguments:
-        data (Tensor): The input data tensor to be processed.
+        data (Tensor): Input data tensor across which to apply the kernel.
         tile_size (int, optional): Size of the tile for kernel computation.
             Set tile_size << K to avoid OOM. Defaults to None.
     """

@@ -6,9 +6,10 @@ import torch as pt
 import torch.linalg as la
 from scipy.sparse.linalg import svds
 from torch import Tensor
+from torch.nn.functional import cosine_similarity
 
 from .kernels import class_dist_norm_var, log_kernel
-from .util import inner_product, normalize, symm_reduce
+from .util import normalize, symm_reduce
 
 
 def variability_cdnv(
@@ -19,8 +20,8 @@ def variability_cdnv(
     Galanti et al. (2021): https://arxiv.org/abs/2112.15121
 
     Arguments:
-        V (Tensor): The matrix of within-class variances for the classes.
-        M (Tensor): The matrix of feature (or class mean) embeddings.
+        V (Tensor): Matrix of within-class variances for the classes.
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
         dist_exp (int): The power with which to exponentiate the distance
             normalizer. A greater power further diminishes the contribution of
             mutual variability between already-disparate classes. Defaults to
@@ -43,9 +44,9 @@ def variability_ratio(V_intra: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
     Tirer et al. (2023): https://proceedings.mlr.press/v202/tirer23a
 
     Arguments:
-        V_intra (Tensor): The within-class variance matrix.
-        M (Tensor): The matrix of feature (or class mean) embeddings.
-        m_G (Tensor, optional): The global mean vector. Defaults to 0.
+        V_intra (Tensor): Matrix of within-class (co)variance.
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
 
     Returns:
         float: The ratio of traces of (co)variances.
@@ -64,9 +65,9 @@ def variability_pinv(
     Papyan et al. (2020): https://doi.org/10.1073/pnas.2015509117
 
     Arguments:
-        V_intra (Tensor): The within-class variance matrix.
-        M (Tensor): The matrix of feature (or class mean) embeddings.
-        m_G (Tensor, optional): The global mean vector. Defaults to 0.
+        V_intra (Tensor): Matrix of within-class (co)variance.
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
         svd (bool, optional): Whether to compute Moore-Penrose pseudo-inverse
             directly. Default is False, using torch.pinv.
 
@@ -88,11 +89,11 @@ def variability_pinv(
 
 
 def mean_norms(M: Tensor, m_G: Tensor = 0) -> Tensor:
-    """Compute the squared norms of embeddings (centred by global mean).
+    """Compute the squared norms of (mean) embeddings (centred).
 
     Arguments:
-        M (Tensor): The matrix of feature (or class mean) embeddings.
-        m_G (Tensor, optional): The global mean vector. Defaults to 0.
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
 
     Returns:
         Tensor: A vector containing the squared norms for each class.
@@ -101,43 +102,114 @@ def mean_norms(M: Tensor, m_G: Tensor = 0) -> Tensor:
     return M_centred.norm(dim=-1) ** 2  # (K)
 
 
-def interference(M: Tensor, m_G: Tensor = 0, tile_size: int = None) -> Tensor:
-    """Compute the pairwise interference grid between embeddings.
+def interference(M: Tensor, m_G: Tensor = 0) -> Tensor:
+    """Compute the pairwise interference grid between (mean) embeddings.
 
     Arguments:
         M (Tensor): The matrix of feature (or class mean) embeddings.
-        m_G (Tensor, optional): The global mean vector. Defaults to 0.
-        tile_size (int, optional): Size of the tile for kernel computation.
-            Set tile_size << K to avoid OOM. Defaults to None.
+        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
 
     Returns:
         Tensor: A matrix representing pairwise interferences.
     """
     M_centred = M - m_G
-    return inner_product(normalize(M_centred), tile_size)  # (K,K)
+    return pt.inner(M_centred, M_centred)  # (K,K)
 
 
-def kernel_distances(
-    M: Tensor, m_G: Tensor = 0, kernel: callable = log_kernel, tile_size: int = None
+def similarity(W: Tensor, M: Tensor, m_G: Tensor = 0, cos: bool = False) -> Tensor:
+    """Compute the (cosine or dot-product) similarity between a set of (mean)
+    embeddings and classifiers vectors.
+
+    Arguments:
+        W (Tensor): Weight vectors of the classifiers. Computations will be
+            performed on the device of W.
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
+        cos (bool, optional): Whether to use cosine similarity. Defaults to
+            False, using dot-product similarity.
+
+    Returns:
+        Tensor: Per-class similarities between embeddings and classifiers.
+    """
+    M_centred = (M - m_G).to(W.device)
+
+    if cos:
+        return cosine_similarity(W, M_centred.to(W.dtype))
+    return (W * M_centred).sum(dim=1)
+
+
+def dist_norms(W: Tensor, M: Tensor, m_G: Tensor = 0, norm: bool = True) -> Tensor:
+    """Compute the distance between a set of (mean) embeddings and classifiers
+    vectors.
+
+    Arguments:
+        W (Tensor): Weight vectors of the classifiers. Computations will be
+            performed on the device of W.
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
+        norm (bool, optional): Whether to normalize vectors before taking
+            their distances. Defaults to True, allowing two dual spaces.
+
+    Returns:
+        Tensor: Per-class distances between embeddings and classifiers.
+    """
+    M_centred = (M - m_G).to(W.device)
+    if norm:
+        W, M_centred = normalize(W), normalize(M_centred)
+    return (W - M_centred).norm(dim=-1)
+
+
+def kernel_grid(
+    M: Tensor,
+    m_G: Tensor = 0,
+    kernel: callable = log_kernel,
+    tile_size: int = None,
+) -> Tensor:
+    """Compute the grid from the kernel function on pairwise interactions
+    between embeddings. Self-interactions are excluded.
+
+    Arguments:
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
+        kernel (callable, optional): The kernel with which to compute
+            interactions. Defaults to the inner product. Other common
+            functions include the logarithmic or Riesz distance kernels.
+        tile_size (int, optional): Size of the tile for kernel computation.
+            Set tile_size << K to avoid OOM. Defaults to None.
+
+    Returns:
+        float: Average of pairwise kernel interactions.
+        float: Variance of pairwise kernel interactions.
+    """
+    M_centred_normed = normalize(M - m_G)
+    return kernel(M_centred_normed, tile_size=tile_size)
+
+
+def kernel_stats(
+    M: Tensor,
+    m_G: Tensor = 0,
+    kernel: callable = log_kernel,
+    tile_size: int = None,
 ) -> Tuple[float, float]:
     """Compute the average and variance of a kernel function on pairwise
-    distances between embeddings. Self-distances are excluded.
+    interactions between embeddings. Self-interactions are excluded.
     Liu et al. (2023): https://arxiv.org/abs/2303.06484
 
     Arguments:
-        M (Tensor): The matrix of feature (or class mean) embeddings.
-        m_G (Tensor, optional): The global mean vector. Defaults to 0.
-        kernel (callable, optional): The kernel with which to compute
-            distances. Defaults to logarithmic inverse distances.
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
+        kernel (callable): Kernel function with which to compute
+            interactions. Defaults to the inner product. Other common
+            functions include the logarithmic or Riesz distance kernels.
         tile_size (int, optional): Size of the tile for kernel computation.
             Set tile_size << K to avoid OOM. Defaults to None.
-    Returns:
-        float: Average of pairwise kernel distances.
-        float: Variance of pairwise kernel distances.
-    """
-    M_centred_normed = normalize(M - m_G)
 
-    grid: Tensor = kernel(M_centred_normed, tile_size)
+    Returns:
+        float: Average of pairwise kernel interactions.
+        float: Variance of pairwise kernel interactions.
+    """
+
+    grid: Tensor = kernel_grid(M, m_G, kernel, tile_size)
     avg = symm_reduce(grid, pt.sum)
     var = symm_reduce(grid, lambda row: pt.sum((row - avg) ** 2))
 
@@ -150,8 +222,8 @@ def _structure_error(A: Tensor, B: Tensor) -> float:
     (ETF), expressed as the matrix norm of their difference.
 
     Arguments:
-        A (Tensor): The first tensor for comparison.
-        B (Tensor): The second tensor for comparison.
+        A (Tensor): First tensor for comparison.
+        B (Tensor): Second tensor for comparison.
 
     Returns:
         float: Scalar error of excess incoherence from simplex ETF.
@@ -170,8 +242,8 @@ def simplex_etf_error(M: Tensor, m_G: Tensor = 0) -> float:
     embeddings, relative to the ideal simplex ETF.
 
     Arguments:
-        M (Tensor): The matrix of feature (or class mean) embeddings.
-        m_G (Tensor, optional): The global mean vector. Defaults to 0.
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
 
     Returns:
         float: Scalar error of excess incoherence from simplex ETF.
@@ -185,9 +257,9 @@ def self_duality_error(W: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
     embeddings and classifiers, relative to the ideal simplex ETF.
 
     Arguments:
-        W (Tensor): The weight vectors of the classifiers.
-        M (Tensor): The matrix of feature (or class mean) embeddings.
-        m_G (Tensor, optional): The global mean vector. Defaults to 0.
+        W (Tensor): Weight vectors of the classifiers.
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
 
     Returns:
         float: Scalar error of excess incoherence from simplex ETF.
@@ -216,7 +288,7 @@ def clf_ncc_agreement(
     if hits is None and misses and misses.shape == Ns.shape:
         hits = Ns - misses
 
-    if not hits or hits.shape != Ns.shape:
+    if hits is None or hits.shape != Ns.shape:
         return None  # something has gone wrong
 
     if weighted:

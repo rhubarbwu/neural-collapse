@@ -17,12 +17,12 @@ class Accumulator(metaclass=ABCMeta):
     accumulate data, and compute averages.
 
     Attributes:
-        n_classes (int): The number of classes.
-        d_vectors (int): The dimensionality of the input vectors.
-        ctype (torch.dtype): The data type for counts.
-        dtype (torch.dtype): The data type for totals and computations.
-        device (Union[str, torch.device]): The device on which tensors are stored.
-        ns_samples (Tensor): A tensor to hold the number of samples for each class.
+        n_classes (int): Number of classes.
+        d_vectors (int): Dimensionality of the input vectors.
+        ctype (torch.dtype): Data type for counts.
+        dtype (torch.dtype): Data type for totals and computations.
+        device (Union[str, torch.device]): Device on which tensors are stored.
+        ns_samples (Tensor): Tensor to store the number of samples for each class.
 
     Methods:
         filter_indices_by_n_samples(minimum=0, maximum=None):
@@ -122,7 +122,7 @@ class CovarAccumulator(Accumulator):
 
     Attributes:
         hash_M (hash): Hash of the mean vectors for ensuring consistency.
-        totals (Tensor): A tensor to hold the accumulated covariance totals.
+        totals (Tensor): Matrix to store the accumulated covariance totals.
 
     Methods:
         accumulate(X, Y, M):
