@@ -1,5 +1,5 @@
 from math import sqrt
-from typing import Tuple
+from typing import List, Tuple
 
 import numpy as np
 import torch as pt
@@ -8,7 +8,7 @@ from scipy.sparse.linalg import svds
 from torch import Tensor
 from torch.nn.functional import cosine_similarity
 
-from .kernels import class_dist_norm_var, log_kernel
+from .kernels import class_dist_norm_var
 from .util import normalize, symm_reduce
 
 
@@ -75,7 +75,6 @@ def variability_pinv(
         float: The computed within-class variability collapse value.
     """
     (K, D), M_centred = M.shape, M - m_G
-
     V_inter = M_centred.mT @ M_centred / D  # (D,D)
 
     if svd:  # compute MP-inverse directly using SVD
@@ -88,21 +87,26 @@ def variability_pinv(
     return pt.trace(ratio_prod).item() / K  # (1)
 
 
-def mean_norms(M: Tensor, m_G: Tensor = 0) -> Tensor:
-    """Compute the squared norms of (mean) embeddings (centred).
+def mean_norms(M: Tensor, m_G: Tensor = 0, post_funcs: List[callable] = []) -> Tensor:
+    """Compute the norms of (mean) embeddings (centred).
 
     Arguments:
         M (Tensor): Matrix of feature (e.g. class mean) embeddings.
         m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
+        post_funcs (List[callable], optional): Functions (Tensor -> Tensor)
+            applied to the computed norms. Defaults to [].
 
     Returns:
-        Tensor: A vector containing the squared norms for each class.
+        Tensor: A vector containing the norms for each class.
     """
     M_centred = M - m_G
-    return M_centred.norm(dim=-1) ** 2  # (K)
+    result = M_centred.norm(dim=-1)  # (K)
+    for post_func in post_funcs:
+        result = post_func(result)
+    return result
 
 
-def interference(M: Tensor, m_G: Tensor = 0) -> Tensor:
+def interference_grid(M: Tensor, m_G: Tensor = 0) -> Tensor:
     """Compute the pairwise interference grid between (mean) embeddings.
 
     Arguments:
@@ -116,8 +120,8 @@ def interference(M: Tensor, m_G: Tensor = 0) -> Tensor:
     return pt.inner(M_centred, M_centred)  # (K,K)
 
 
-def similarity(W: Tensor, M: Tensor, m_G: Tensor = 0, cos: bool = False) -> Tensor:
-    """Compute the (cosine or dot-product) similarity between a set of (mean)
+def similarities(W: Tensor, M: Tensor, m_G: Tensor = 0, cos: bool = False) -> Tensor:
+    """Compute the (cosine or dot-product) similarities between a set of (mean)
     embeddings and classifiers vectors.
 
     Arguments:
@@ -132,13 +136,12 @@ def similarity(W: Tensor, M: Tensor, m_G: Tensor = 0, cos: bool = False) -> Tens
         Tensor: Per-class similarities between embeddings and classifiers.
     """
     M_centred = (M - m_G).to(W.device)
-
     if cos:
         return cosine_similarity(W, M_centred.to(W.dtype))
     return (W * M_centred).sum(dim=1)
 
 
-def dist_norms(W: Tensor, M: Tensor, m_G: Tensor = 0, norm: bool = True) -> Tensor:
+def distance_norms(W: Tensor, M: Tensor, m_G: Tensor = 0, norm: bool = True) -> Tensor:
     """Compute the distance between a set of (mean) embeddings and classifiers
     vectors.
 
@@ -159,63 +162,6 @@ def dist_norms(W: Tensor, M: Tensor, m_G: Tensor = 0, norm: bool = True) -> Tens
     return (W - M_centred).norm(dim=-1)
 
 
-def kernel_grid(
-    M: Tensor,
-    m_G: Tensor = 0,
-    kernel: callable = log_kernel,
-    tile_size: int = None,
-) -> Tensor:
-    """Compute the grid from the kernel function on pairwise interactions
-    between embeddings. Self-interactions are excluded.
-
-    Arguments:
-        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
-        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
-        kernel (callable, optional): The kernel with which to compute
-            interactions. Defaults to the inner product. Other common
-            functions include the logarithmic or Riesz distance kernels.
-        tile_size (int, optional): Size of the tile for kernel computation.
-            Set tile_size << K to avoid OOM. Defaults to None.
-
-    Returns:
-        float: Average of pairwise kernel interactions.
-        float: Variance of pairwise kernel interactions.
-    """
-    M_centred_normed = normalize(M - m_G)
-    return kernel(M_centred_normed, tile_size=tile_size)
-
-
-def kernel_stats(
-    M: Tensor,
-    m_G: Tensor = 0,
-    kernel: callable = log_kernel,
-    tile_size: int = None,
-) -> Tuple[float, float]:
-    """Compute the average and variance of a kernel function on pairwise
-    interactions between embeddings. Self-interactions are excluded.
-    Liu et al. (2023): https://arxiv.org/abs/2303.06484
-
-    Arguments:
-        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
-        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
-        kernel (callable): Kernel function with which to compute
-            interactions. Defaults to the inner product. Other common
-            functions include the logarithmic or Riesz distance kernels.
-        tile_size (int, optional): Size of the tile for kernel computation.
-            Set tile_size << K to avoid OOM. Defaults to None.
-
-    Returns:
-        float: Average of pairwise kernel interactions.
-        float: Variance of pairwise kernel interactions.
-    """
-
-    grid: Tensor = kernel_grid(M, m_G, kernel, tile_size)
-    avg = symm_reduce(grid, pt.sum)
-    var = symm_reduce(grid, lambda row: pt.sum((row - avg) ** 2))
-
-    return avg, var
-
-
 def _structure_error(A: Tensor, B: Tensor) -> float:
     """Compute the error between the cross-class coherence structure formed
     by two sets of embeddings and the ideal simplex equiangular tight frame
@@ -229,12 +175,14 @@ def _structure_error(A: Tensor, B: Tensor) -> float:
         float: Scalar error of excess incoherence from simplex ETF.
     """
     (K, _) = A.shape
-    ideal = (pt.eye(K) - pt.ones(K, K) / K) / sqrt(K - 1)  # (K,K)
 
     struct = B.to(A.device) @ A.mT  # (K,K)
     struct /= la.matrix_norm(struct)
 
-    return la.matrix_norm(struct - ideal.to(struct.device)).item()
+    struct += 1 / K / sqrt(K - 1)
+    struct.diagonal().sub_(1 / sqrt(K - 1))
+
+    return la.matrix_norm(struct).item()
 
 
 def simplex_etf_error(M: Tensor, m_G: Tensor = 0) -> float:

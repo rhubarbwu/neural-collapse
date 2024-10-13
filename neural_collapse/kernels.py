@@ -1,9 +1,10 @@
 from math import copysign
+from typing import Tuple
 
 import torch as pt
 from torch import Tensor
 
-from .util import normalize, tiling
+from .util import normalize, symm_reduce, tiling
 
 
 def class_dist_norm_var(
@@ -46,30 +47,20 @@ def class_dist_norm_var(
     return grid
 
 
-def inner_product(data: Tensor, tile_size: int = None) -> Tensor:
-    """Compute the inner product of the input tensor or a grid of inner products based on tiles.
+def dist_kernel(data: Tensor, tile_size: int = None) -> Tensor:
+    """Compute the grid of pairwise vector distances across a set of vectors.
 
-    If `tile_size` is not specified, the function calculates the inner product
-    of the input tensor with itself. If a `tile_size` is provided, it computes
-    a grid of inner products over the tiles of the input data.
-
-    Args:
-        data (Tensor): Input tensor for which to compute the inner product.
-        tile_size (int, optional): Size of the tiles for calculating the inner
-            product grid. Set tile_size << K to avoid OOM. Defaults to None.
-
-    Returns:
-        Tensor: Inner product matrix of the input with itself.
+    Arguments:
+        data (Tensor): Input data tensor across which to apply the kernel.
+        tile_size (int, optional): Size of the tile for kernel computation.
+            Set tile_size << K to avoid OOM. Defaults to None.
     """
-    if not tile_size:
-        return pt.inner(data, data)
-
-    grid = tiling(data, pt.inner, tile_size)
-    return grid
+    kernel = lambda tile_i, tile_j: tile_i.unsqueeze(1) - tile_j
+    return tiling(data, kernel, tile_size)
 
 
 def log_kernel(data: Tensor, exponent: int = -1, tile_size: int = None) -> Tensor:
-    """Compute the grid of (natural) logarithmic distances across vectors.
+    """Compute the grid of pairwise logarithmic  distances across vectors.
     Liu et al. (2023): https://arxiv.org/abs/2303.06484
 
     Arguments:
@@ -79,15 +70,13 @@ def log_kernel(data: Tensor, exponent: int = -1, tile_size: int = None) -> Tenso
         tile_size (int, optional): Size of the tile for kernel computation.
             Set tile_size << K to avoid OOM. Defaults to None.
     """
-    normed = normalize(data)
 
-    def kernel(patch_i, patch_j):
-        diff = patch_i.unsqueeze(1) - patch_j
+    def kernel(tile_i, tile_j):
+        diff = tile_i.unsqueeze(1) - tile_j
         diff_norms = diff.norm(dim=-1)
         return (diff_norms ** (exponent)).log()
 
-    grid = tiling(normed, kernel, tile_size)
-    return grid
+    return tiling(data, kernel, tile_size)
 
 
 def riesz_kernel(data: Tensor, tile_size: int = None) -> Tensor:
@@ -99,14 +88,67 @@ def riesz_kernel(data: Tensor, tile_size: int = None) -> Tensor:
         tile_size (int, optional): Size of the tile for kernel computation.
             Set tile_size << K to avoid OOM. Defaults to None.
     """
-
     S = data.shape[-1] - 2
-    normed = normalize(data)
 
-    def kernel(patch_i, patch_j):
-        diff = patch_i.unsqueeze(1) - patch_j
+    def kernel(tile_i, tile_j):
+        diff = tile_i.unsqueeze(1) - tile_j
         diff_norms = diff.norm(dim=-1)
         return copysign(1, S) * diff_norms ** (-S)
 
-    grid = tiling(normed, kernel, tile_size)
-    return grid
+    return tiling(data, kernel, tile_size)
+
+
+def kernel_grid(
+    M: Tensor,
+    m_G: Tensor = 0,
+    kernel: callable = dist_kernel,
+    tile_size: int = None,
+) -> Tensor:
+    """Compute the grid from the kernel function on pairwise interactions
+    between embeddings. Self-interactions are excluded.
+
+    Arguments:
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
+        kernel (callable, optional): The kernel with which to compute
+            interactions. Defaults to the inner product. Other common
+            functions include the logarithmic or Riesz distance kernels.
+        tile_size (int, optional): Size of the tile for kernel computation.
+            Set tile_size << K to avoid OOM. Defaults to None.
+
+    Returns:
+        float: Average of pairwise kernel interactions.
+        float: Variance of pairwise kernel interactions.
+    """
+    M_centred_normed = normalize(M - m_G)
+    return kernel(M_centred_normed, tile_size=tile_size)
+
+
+def kernel_stats(
+    M: Tensor,
+    m_G: Tensor = 0,
+    kernel: callable = dist_kernel,
+    tile_size: int = None,
+) -> Tuple[float, float]:
+    """Compute the average and variance of a kernel function on pairwise
+    interactions between embeddings. Self-interactions are excluded.
+    Liu et al. (2023): https://arxiv.org/abs/2303.06484
+
+    Arguments:
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
+        kernel (callable): Kernel function with which to compute
+            interactions. Defaults to the inner product. Other common
+            functions include the logarithmic or Riesz distance kernels.
+        tile_size (int, optional): Size of the tile for kernel computation.
+            Set tile_size << K to avoid OOM. Defaults to None.
+
+    Returns:
+        float: Average of pairwise kernel interactions.
+        float: Variance of pairwise kernel interactions.
+    """
+    grid: Tensor = kernel_grid(M, m_G, kernel, tile_size)
+    avg = symm_reduce(grid, pt.sum)
+    var = symm_reduce(grid, lambda row: pt.sum((row - avg) ** 2))
+
+    return avg, var
