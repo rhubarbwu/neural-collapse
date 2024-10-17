@@ -148,7 +148,7 @@ def kernel_stats(
         float: Variance of pairwise kernel interactions.
     """
     grid: Tensor = kernel_grid(M, m_G, kernel, tile_size)
-    avg = symm_reduce(grid, pt.sum)
+    avg = symm_reduce(grid)
     var = symm_reduce(grid, lambda row: pt.sum((row - avg) ** 2))
 
-    return avg, var
+    return avg.item(), var.item()

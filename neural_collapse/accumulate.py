@@ -11,10 +11,10 @@ from .util import hashify, resolve
 class Accumulator(metaclass=ABCMeta):
     """Base class for accumulators that track sample counts and totals.
 
-    This abstract class provides the foundation for different types of accumulators
-    that calculate statistics based on input tensors. It manages sample counts
-    for each class and includes methods to filter indices based on sample counts,
-    accumulate data, and compute averages.
+    This abstract class provides the foundation for different types of
+    accumulators that calculate statistics based on input tensors. It manages
+    sample counts for each class and includes methods to filter indices based
+    on sample counts, accumulate data, and compute averages.
 
     Attributes:
         n_classes (int): Number of classes.
@@ -22,17 +22,18 @@ class Accumulator(metaclass=ABCMeta):
         ctype (torch.dtype): Data type for counts.
         dtype (torch.dtype): Data type for totals and computations.
         device (Union[str, torch.device]): Device on which tensors are stored.
-        ns_samples (Tensor): Tensor to store the number of samples for each class.
+        ns_samples (Tensor): Tensor to store per-class sample counts.
 
     Methods:
         filter_indices_by_n_samples(minimum=0, maximum=None):
-            Filters indices of classes based on a minimum and maximum sample count.
+            Filters class indices based on a minimum and maximum sample count.
         class_idxs(X, Y):
-            Returns indices of samples belonging to each class and updates sample counts.
+            Increment sample counts and return per-class sample indices.
         compute(idxs=None, weighted=False):
-            Computes average values based on accumulated totals and sample counts.
+            Computes averages of accumulated samples (totals/counts).
         accumulate(*args):
-            Abstract method to be implemented by subclasses to define specific accumulation behavior.
+            Abstract method to be implemented by subclasses to define specific
+            accumulation behavior.
     """
 
     def __init__(
@@ -71,14 +72,13 @@ class Accumulator(metaclass=ABCMeta):
     def compute(
         self, idxs: List[int] = None, weighted: bool = False
     ) -> Tuple[Tensor, Tensor]:
-        eps = pt.finfo(self.dtype).eps
-
         ns_samples, totals = self.ns_samples, self.totals  # (K), (K,D)
         if idxs is not None:
             ns_samples, totals = ns_samples[idxs], totals[idxs]  # (K'), (K',D)
         if len(self.totals.shape) > 1:
             ns_samples = ns_samples.unsqueeze(1)
 
+        eps = pt.finfo(self.dtype).eps
         avg = totals / (ns_samples + eps).to(self.dtype)  # (K, D)
         if weighted:
             avg_G = ns_samples.to(self.dtype) @ avg / (ns_samples.sum() + eps)  # (D)
@@ -95,12 +95,12 @@ class Accumulator(metaclass=ABCMeta):
 class MeanAccumulator(Accumulator):
     """Accumulator that computes mean vectors for each class.
 
-    Inherits from the Accumulator class and accumulates the totals for each class
-    to compute the mean of the input vectors.
+    Inherits from the Accumulator class: accumulates the totals for each
+    class to compute the mean of the input vectors.
 
     Methods:
         accumulate(X, Y):
-            Updates the total counts and computes the sum of input vectors for each class.
+            Increment and return per-class mean totals and sample counts.
     """
 
     def __init__(self, *args, **kwargs):
@@ -117,7 +117,7 @@ class MeanAccumulator(Accumulator):
 class CovarAccumulator(Accumulator):
     """Accumulator that computes covariance matrices for each class.
 
-    Inherits from the Accumulator class and accumulates the differences between
+    Inherits from the Accumulator class: accumulates the differences between
     input vectors and class-specific mean vectors to compute covariance.
 
     Attributes:
@@ -126,9 +126,10 @@ class CovarAccumulator(Accumulator):
 
     Methods:
         accumulate(X, Y, M):
-            Updates the totals based on the differences between input vectors and class means.
+            Increment covariance totals with squared differences between
+            input vectors and their label-corresponding class means.
         compute(idxs=None):
-            Computes the average covariance matrix based on accumulated totals.
+            Computes the average covariance matrix from accumulated totals.
     """
 
     def __init__(self, *args, M: Tensor = None, **kwargs):
@@ -155,14 +156,15 @@ class CovarAccumulator(Accumulator):
         if idxs is not None:
             ns_samples, totals = ns_samples[idxs], totals[idxs]
 
-        return totals / (ns_samples.sum() + pt.finfo(self.dtype).eps).to(self.dtype)
+        eps = pt.finfo(self.dtype).eps
+        return totals / (ns_samples.sum() + eps).to(self.dtype)
 
 
 class VarNormAccumulator(Accumulator):
     """Accumulator that computes the variance norms for each class.
 
-    Inherits from the Accumulator class and calculates the variance of input vectors
-    relative to class-specific mean vectors.
+    Inherits from the Accumulator class and calculates the variance of input
+    vectors relative to class-specific mean vectors.
 
     Attributes:
         hash_M (hash): Hash of the mean vectors for ensuring consistency.
@@ -170,7 +172,8 @@ class VarNormAccumulator(Accumulator):
 
     Methods:
         accumulate(X, Y, M):
-            Updates the totals based on squared differences between input vectors and class means.
+            Increment per-class totals with norms of squared differences
+            between input vectors and their label-corresponding class means.
     """
 
     def __init__(self, *args, M: Tensor = None, **kwargs):
@@ -193,22 +196,25 @@ class VarNormAccumulator(Accumulator):
 
 
 class DecAccumulator(Accumulator):
-    """Accumulator that computes decisions from multiple classifiers.
+    """Accumulator that computes decision hits from multiple classifiers.
 
-    Inherits from the Accumulator class and integrates results from nearest-class center
-    and linear classifiers to track matches for each class.
+    Inherits from the Accumulator class and integrates results from
+    nearest-class center and linear classifiers to track hits for each class.
 
     Attributes:
         hash_M (hash): Hash of the mean vectors for ensuring consistency.
-        hash_W (hash): Hash of the weights for the linear classifier for consistency.
-        index (IndexFlatL2): FAISS index for efficient nearest neighbor searches.
-        totals (Tensor): A tensor to hold the accumulated match counts for each class.
+        hash_W (hash): Hash of the linear classifier weights for consistency.
+        index (IndexFlatL2): FAISS index for efficient nearest neighbors.
+        totals (Tensor): Tensor of per-class hit counts.
 
     Methods:
         create_index(M):
             Initializes a FAISS index with the provided mean vectors.
         accumulate(X, Y, M, W):
-            Updates the totals based on matches between the nearest-class center and linear classifiers.
+            Updates the totals based on hits between the nearest-class center
+            and linear classifiers.
+        compute(idxs=None, weighted=True):
+            Computes per-class and global classifier decision agreement rates.
     """
 
     def __init__(self, *args, M: Tensor = None, W: Tensor = None, **kwargs):

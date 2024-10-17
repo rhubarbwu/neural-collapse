@@ -45,7 +45,7 @@ def tiling(data: Tensor, kernel: callable, tile_size: int = None) -> Tensor:
     return outgrid
 
 
-def symm_reduce(data: Tensor, reduce: callable = pt.sum) -> float:
+def symm_reduce(data: Tensor, reduce: callable = pt.sum) -> Tensor:
     """Compute a symmetric reduction of the upper triangle of a square tensor.
 
     This function computes a specified reduction the upper triangle of a
@@ -58,7 +58,7 @@ def symm_reduce(data: Tensor, reduce: callable = pt.sum) -> float:
             reduction. Defaults to `pt.sum`.
 
     Returns:
-        float: Mean of the reduction applied to the upper triangle of the
+        Tensor: Mean of the reduction applied to the upper triangle of the
             symmetric tensor.
     """
     N = data.shape[0]
@@ -74,5 +74,4 @@ def symm_reduce(data: Tensor, reduce: callable = pt.sum) -> float:
         row = data[N // 2 - 1][N // 2 :]
         total += reduce(row)
 
-    mean = total / (N * (N - 1) / 2)
-    return mean.item()
+    return total / (N * (N - 1) / 2)

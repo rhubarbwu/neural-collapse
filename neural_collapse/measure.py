@@ -1,5 +1,5 @@
 from math import sqrt
-from typing import List, Tuple
+from typing import List
 
 import numpy as np
 import torch as pt
@@ -8,6 +8,7 @@ from scipy.sparse.linalg import svds
 from torch import Tensor
 from torch.nn.functional import cosine_similarity
 
+from .accumulate import DecAccumulator
 from .kernels import class_dist_norm_var
 from .util import normalize, symm_reduce
 
@@ -34,7 +35,7 @@ def variability_cdnv(
     """
     kernel_grid = class_dist_norm_var(V, M, dist_exp, tile_size)
     avg = symm_reduce(kernel_grid, pt.sum)
-    return avg
+    return avg.item()
 
 
 def variability_ratio(V_intra: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
@@ -53,7 +54,8 @@ def variability_ratio(V_intra: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
     """
     (_, D), M_centred = M.shape, M - m_G
     V_inter = M_centred.mT @ M_centred / D  # (D,D)
-    return pt.trace(V_intra) / pt.trace(V_inter)  # (1)
+    ratio = pt.trace(V_intra) / pt.trace(V_inter)
+    return ratio.item()
 
 
 def variability_pinv(
@@ -166,6 +168,7 @@ def _structure_error(A: Tensor, B: Tensor) -> float:
     """Compute the error between the cross-class coherence structure formed
     by two sets of embeddings and the ideal simplex equiangular tight frame
     (ETF), expressed as the matrix norm of their difference.
+    Kothapalli (2023): https://arxiv.org/abs/2206.04041
 
     Arguments:
         A (Tensor): First tensor for comparison.
@@ -188,6 +191,7 @@ def _structure_error(A: Tensor, B: Tensor) -> float:
 def simplex_etf_error(M: Tensor, m_G: Tensor = 0) -> float:
     """Compute the excess cross-class incoherence within a set of (mean)
     embeddings, relative to the ideal simplex ETF.
+    Kothapalli (2023): https://arxiv.org/abs/2206.04041
 
     Arguments:
         M (Tensor): Matrix of feature (e.g. class mean) embeddings.
@@ -203,6 +207,7 @@ def simplex_etf_error(M: Tensor, m_G: Tensor = 0) -> float:
 def self_duality_error(W: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
     """Compute the excess cross-class incoherence between a set of (mean)
     embeddings and classifiers, relative to the ideal simplex ETF.
+    Kothapalli (2023): https://arxiv.org/abs/2206.04041
 
     Arguments:
         W (Tensor): Weight vectors of the classifiers.
@@ -217,29 +222,37 @@ def self_duality_error(W: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
 
 
 def clf_ncc_agreement(
-    Ns: Tensor, hits: Tensor = None, misses: Tensor = None, weighted: bool = True
+    accum: DecAccumulator, indices: List[int] = None, weighted: bool = True
 ) -> float:
     """Compute the rate of agreement between the linear and the implicit
     nearest-class centre (NCC) classifiers: percentage of hits over Ns samples.
 
     Arguments:
-        Ns (Tensor): Total number of samples for each class.
-        hits (Tensor, optional): Number of hits (lin == ncc) per class.
-        misses (Tensor, optional): Number of misses (lin != ncc) per class.
+        accum (DecAccumulator): Tracker of per-class sample counts and hits.
+        indices (List[int], optional): Indices of specific classes to include
+            in agreement analysis. Defaults to [], to include all classes.
         weighted (bool, optional): Whether to weigh class hit rates by numbers
-        of samples. Defaults to True.
+            of samples. Defaults to True.
 
     Returns:
         float: The rate of agreement as a float, or None if an error occurs
             (e.g. neither hits nor misses given, or shape mismatch)
     """
-    if hits is None and misses and misses.shape == Ns.shape:
-        hits = Ns - misses
+    _, global_agree_rates = accum.compute(indices, weighted)
+    return global_agree_rates.item()
 
-    if hits is None or hits.shape != Ns.shape:
-        return None  # something has gone wrong
 
-    if weighted:
-        return (hits.sum() / Ns.sum()).item()
-    else:
-        return (hits / Ns).mean().item()
+def orthogonality_deviation(M: Tensor, m_G_ood: Tensor = 0) -> float:
+    """Compute the average normalized deviation of means from the global mean
+    embedding from out-of-distribution (OoD) data.
+    Ammar et al. (2024): https://arxiv.org/abs/2310.06823
+
+    Arguments:
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        m_G_ood (Tensor, optional): Out-of-Distribution bias (e.g. global
+            mean) vector. Defaults to 0.
+    Returns:
+        float: Average normalized deviation of means from the OoD global mean.
+    """
+    deviations = pt.abs(similarities(M, m_G_ood, cos=True))  # (K)
+    return pt.mean(deviations).item()
