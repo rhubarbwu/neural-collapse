@@ -13,52 +13,7 @@ from .kernels import class_dist_norm_var
 from .util import normalize, symm_reduce
 
 
-def variability_cdnv(
-    V: Tensor, M: Tensor, dist_exp: float = 1.0, tile_size: int = None
-) -> float:
-    """Compute the average class-distance normalized variances (CDNV).
-    This metric reflects pairwise variability adjusted for mean distances.
-    Galanti et al. (2021): https://arxiv.org/abs/2112.15121
-
-    Arguments:
-        V (Tensor): Matrix of within-class variances for the classes.
-        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
-        dist_exp (int): The power with which to exponentiate the distance
-            normalizer. A greater power further diminishes the contribution of
-            mutual variability between already-disparate classes. Defaults to
-            1, equivalent to the CDNV introduced by Galanti et al. (2021).
-        tile_size (int, optional): Size of the tile for kernel computation.
-            Set tile_size << K to avoid OOM. Defaults to None.
-
-    Returns:
-        float: The average CDNVs across all class pairs.
-    """
-    kernel_grid = class_dist_norm_var(V, M, dist_exp, tile_size)
-    avg = symm_reduce(kernel_grid, pt.sum)
-    return avg.item()
-
-
-def variability_ratio(V_intra: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
-    """Compute the ratio of traces of (co)variances: within-class (intra)
-    variance to between-class (inter) variance.
-    Hui et al. (2022): https://arxiv.org/abs/2202.08384
-    Tirer et al. (2023): https://proceedings.mlr.press/v202/tirer23a
-
-    Arguments:
-        V_intra (Tensor): Matrix of within-class (co)variance.
-        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
-        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
-
-    Returns:
-        float: The ratio of traces of (co)variances.
-    """
-    (_, D), M_centred = M.shape, M - m_G
-    V_inter = M_centred.mT @ M_centred / D  # (D,D)
-    ratio = pt.trace(V_intra) / pt.trace(V_inter)
-    return ratio.item()
-
-
-def variability_pinv(
+def covariance_pinv(
     V_intra: Tensor, M: Tensor, m_G: Tensor = 0, svd: bool = False
 ) -> float:
     """Compute within-class variability collapse: trace of the product
@@ -74,7 +29,7 @@ def variability_pinv(
             directly. Default is False, using torch.pinv.
 
     Returns:
-        float: The computed within-class variability collapse value.
+        float: Product trace of between-class/within-class (co)variances.
     """
     (K, D), M_centred = M.shape, M - m_G
     V_inter = M_centred.mT @ M_centred / D  # (D,D)
@@ -87,6 +42,51 @@ def variability_pinv(
 
     ratio_prod = la.pinv(V_inter) @ V_intra.to(V_inter.device)  # (D,D)
     return pt.trace(ratio_prod).item() / K  # (1)
+
+
+def covariance_ratio(V_intra: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
+    """Compute the ratio of traces of (co)variances: within-class (intra)
+    variance to between-class (inter) variance.
+    Hui et al. (2022): https://arxiv.org/abs/2202.08384
+    Tirer et al. (2023): https://proceedings.mlr.press/v202/tirer23a
+
+    Arguments:
+        V_intra (Tensor): Matrix of within-class (co)variance.
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
+
+    Returns:
+        float: Ratio of traces of between-class/within-class (co)variances.
+    """
+    (_, D), M_centred = M.shape, M - m_G
+    V_inter = M_centred.mT @ M_centred / D  # (D,D)
+    ratio = pt.trace(V_intra) / pt.trace(V_inter)
+    return ratio.item()
+
+
+def variability_cdnv(
+    V: Tensor, M: Tensor, dist_exp: float = 1.0, tile_size: int = None
+) -> float:
+    """Compute the average class-distance normalized variances (CDNV).
+    This metric reflects pairwise variability adjusted for mean distances.
+    Galanti et al. (2021): https://arxiv.org/abs/2112.15121
+
+    Arguments:
+        V (Tensor): Matrix of within-class variance norms for the classes.
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        dist_exp (int): The power with which to exponentiate the distance
+            normalizer. A greater power further diminishes the contribution of
+            mutual variability between already-disparate classes. Defaults to
+            1, equivalent to the CDNV introduced by Galanti et al. (2021).
+        tile_size (int, optional): Size of the tile for kernel computation.
+            Set tile_size << K to avoid OOM. Defaults to None.
+
+    Returns:
+        float: The average CDNVs across all class pairs.
+    """
+    kernel_grid = class_dist_norm_var(V, M, dist_exp, tile_size)
+    avg = symm_reduce(kernel_grid, pt.sum)
+    return avg.item()
 
 
 def mean_norms(M: Tensor, m_G: Tensor = 0, post_funcs: List[callable] = []) -> Tensor:

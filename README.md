@@ -18,16 +18,26 @@ import neural_collapse as nc
 
 ## Usage
 
-Here's an snippet for an [example on the MNIST dataset](./examples).
+We assume that, you,
+
+- Already trained your model or are in the process with a programmable loop,
+  where the top-layer classifier weights are available.
+- Have your iterable dataloader(s) available.
+- Have model evaluation functions or results; technically optional but ideal to have.
+
+### Accumulators
+
+Firstly, you'll need to accumulate the,
+
+1. Class-mean embeddings from the train set.
+2. Within-class covariances or variance norms from the train set.
+3. Decision agreement from unseen data (validation and/or test).
+
+Here's our snippet for an [example on the MNIST dataset](./examples/mnist.py).
 
 ```py
 from neural_collapse.accumulate import (CovarAccumulator, DecAccumulator,
                                         MeanAccumulator, VarNormAccumulator)
-from neural_collapse.measure import (clf_ncc_agreement, self_duality_error,
-                                     simplex_etf_error, variability_cdnv,
-                                     variability_pinv, variability_ratio)
-
-model.eval()
 
 mean_accum = MeanAccumulator(10, 512, "cuda")
 for i, (images, labels) in enumerate(train_loader):
@@ -36,33 +46,53 @@ for i, (images, labels) in enumerate(train_loader):
     mean_accum.accumulate(Features.value, labels)
 means, mG = mean_accum.compute()
 
-var_accum = VarNormAccumulator(10, 512, "cuda", M=means)
+var_norms_accum = VarNormAccumulator(10, 512, "cuda", M=means) # for CDNV
 covar_accum = CovarAccumulator(10, 512, "cuda", M=means)
 for i, (images, labels) in enumerate(train_loader):
     images, labels = images.to(device), labels.to(device)
     outputs = model(images)
-    var_accum.accumulate(Features.value, labels, means)
+    var_norms_accum.accumulate(Features.value, labels, means)
     covar_accum.accumulate(Features.value, labels, means)
-var, _ = var_accum.compute()
-covar = covar_accum.compute()
+var_norms, _ = var_norms_accum.compute() # for CDNV
+covar_within = covar_accum.compute()
 
 dec_accum = DecAccumulator(10, 512, "cuda", M=means, W=model.fc.weight)
 for i, (images, labels) in enumerate(test_loader):
     images, labels = images.to(device), labels.to(device)
     outputs = model(images)
     dec_accum.accumulate(Features.value, labels, means, model.fc.weight)
+```
 
+#### Class-Distance Normalized Variance (CDNV)
+
+NC1 can also be empirically measured by the
+[CDNV (Galanti et. al, 2021)](https://arxiv.org/abs/2112.15121)
+based on the variance norms from the second pass over the train set.
+
+#### Out-of-Distribution (OoD) Means
+
+Optionally, collect class-mean embeddings from an out-of-distribution dataset
+[NC5 (Ammar et al., 2024)](https://arxiv.org/abs/2310.06823).
+
+```py
 ood_mean_accum = MeanAccumulator(10, 512, "cuda")
 for i, (images, labels) in enumerate(ood_loader):
     images, labels = images.to(device), labels.to(device)
     outputs = model(images)
     ood_mean_accum.accumulate(Features.value, labels)
 _, mG_ood = ood_mean_accum.compute()
+```
 
+### Measurements
+
+Here's our snippet for an [example on the MNIST dataset](./examples/mnist.py).
+
+```py
+# means, mG, var_norms, covar_within, dec_accum, mG_ood already defined above
 results = {
-    "nc1_variability_pinv": variability_pinv(covar, means, mG, svd=True),
-    "nc1_variability_ratio": variability_ratio(covar, means, mG),
-    "nc1_variability_cdnv": variability_cdnv(var, means),
+    "nc1_covariance_pinv": covariance_pinv(covar_within, means, mG, svd=True),
+    "nc1_covariance_ratio": covariance_ratio(covar_within, means, mG),
+    "nc1_variability_cdnv": variability_cdnv(var_norms, means),
     "nc2_simplex_etf_error": simplex_etf_error(means, mG),
     "nc3_self_duality": self_duality_error(model.fc.weight, means, mG),
     "nc4_decs_agreement": clf_ncc_agreement(dec_accum),
