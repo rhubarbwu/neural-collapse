@@ -6,8 +6,11 @@
 # install from remote
 pip install git+https://github.com/rhubarbwu/neural-collapse.git
 
-# install locally
-pip install -e .
+# with FAISS
+pip install git+https://github.com/rhubarbwu/neural-collapse.git#egg=neural_collapse[faiss]
+
+# install locally [with faiss]
+pip install -e .[faiss]
 ```
 
 ## Import
@@ -57,10 +60,11 @@ var_norms, _ = var_norms_accum.compute() # for CDNV
 covar_within = covar_accum.compute()
 
 dec_accum = DecAccumulator(10, 512, "cuda", M=means, W=model.fc.weight)
+dec_accum.create_index(means) # index makes means unnecessary in accumulation
 for i, (images, labels) in enumerate(test_loader):
     images, labels = images.to(device), labels.to(device)
     outputs = model(images)
-    dec_accum.accumulate(Features.value, labels, means, model.fc.weight)
+    dec_accum.accumulate(Features.value, labels, model.fc.weight)
 ```
 
 #### Class-Distance Normalized Variance (CDNV)
@@ -88,13 +92,27 @@ _, mG_ood = ood_mean_accum.compute()
 Here's our snippet for an [example on the MNIST dataset](./examples/mnist.py).
 
 ```py
-# means, mG, var_norms, covar_within, dec_accum, mG_ood already defined above
 results = {
-    "nc1_covariance_pinv": covariance_pinv(covar_within, means, mG, svd=True),
-    "nc1_covariance_ratio": covariance_ratio(covar_within, means, mG),
-    "nc1_variability_cdnv": variability_cdnv(var_norms, means),
+    "nc1_covar_pinv": covariance_pinv(covar_within, means, mG, svd=True),
+    "nc1_covar_ratio": covariance_ratio(covar_within, means, mG),
+    "nc1_var_cdnv": variability_cdnv(var_norms, means),
     "nc2_simplex_etf_error": simplex_etf_error(means, mG),
-    "nc3_self_duality": self_duality_error(model.fc.weight, means, mG),
+    "nc3_self_duality": self_duality_error(weights, means, mG),
+    "nc4_decs_agreement": clf_ncc_agreement(dec_accum),
+    "nc5_ood_deviation": orthogonality_deviation(means, mG_ood),
+}
+```
+
+Where centring is required for `means`, you can pre-centre them or include the global mean `mG` as a bias argument, up to you!
+
+```py
+means_centred = means - mG
+results = {
+    "nc1_covar_pinv": covariance_pinv(covar_within, means_centred, svd=True),
+    "nc1_covar_ratio": covariance_ratio(covar_within, means_centred),
+    "nc1_var_cdnv": variability_cdnv(means, var_norms),
+    "nc2_simplex_etf_error": simplex_etf_error(means_centred),
+    "nc3_self_duality": self_duality_error(model.fc.weight, means_centred),
     "nc4_decs_agreement": clf_ncc_agreement(dec_accum),
     "nc5_ood_deviation": orthogonality_deviation(means, mG_ood),
 }

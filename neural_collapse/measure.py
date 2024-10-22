@@ -9,7 +9,7 @@ from torch import Tensor
 from torch.nn.functional import cosine_similarity
 
 from .accumulate import DecAccumulator
-from .kernels import class_dist_norm_var
+from .kernels import class_dist_norm_vars
 from .util import normalize, symm_reduce
 
 
@@ -84,7 +84,7 @@ def variability_cdnv(
     Returns:
         float: The average CDNVs across all class pairs.
     """
-    kernel_grid = class_dist_norm_var(V, M, dist_exp, tile_size)
+    kernel_grid = class_dist_norm_vars(V, M, dist_exp, tile_size)
     avg = symm_reduce(kernel_grid, pt.sum)
     return avg.item()
 
@@ -144,13 +144,12 @@ def similarities(W: Tensor, M: Tensor, m_G: Tensor = 0, cos: bool = False) -> Te
 
 
 def distance_norms(W: Tensor, M: Tensor, m_G: Tensor = 0, norm: bool = True) -> Tensor:
-    """Compute the distance between a set of (mean) embeddings and classifiers
-    vectors.
+    """Compute the distance between (mean) embeddings and classifier vectors.
 
     Arguments:
+        M (Tensor): Feature (e.g. class mean) embeddings vectors.
         W (Tensor): Weight vectors of the classifiers. Computations will be
             performed on the device of W.
-        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
         m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
         norm (bool, optional): Whether to normalize vectors before taking
             their distances. Defaults to True, allowing two dual spaces.
@@ -164,9 +163,9 @@ def distance_norms(W: Tensor, M: Tensor, m_G: Tensor = 0, norm: bool = True) -> 
     return (W - M_centred).norm(dim=-1)
 
 
-def _structure_error(A: Tensor, B: Tensor) -> float:
-    """Compute the error between the cross-class coherence structure formed
-    by two sets of embeddings and the ideal simplex equiangular tight frame
+def structure_error(A: Tensor, B: Tensor) -> float:
+    """Compute the error between the cross-coherence structure formed
+    by two sets of vectors and the ideal simplex equiangular tight frame
     (ETF), expressed as the matrix norm of their difference.
     Kothapalli (2023): https://arxiv.org/abs/2206.04041
 
@@ -201,7 +200,7 @@ def simplex_etf_error(M: Tensor, m_G: Tensor = 0) -> float:
         float: Scalar error of excess incoherence from simplex ETF.
     """
     M_centred = M - m_G
-    return _structure_error(M_centred, M_centred)
+    return structure_error(M_centred, M_centred)
 
 
 def self_duality_error(W: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
@@ -218,7 +217,7 @@ def self_duality_error(W: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
         float: Scalar error of excess incoherence from simplex ETF.
     """
     M_centred = M - m_G
-    return _structure_error(M_centred, W)
+    return structure_error(M_centred, W)
 
 
 def clf_ncc_agreement(

@@ -7,7 +7,7 @@ from torch import Tensor
 from .util import normalize, symm_reduce, tiling
 
 
-def class_dist_norm_var(
+def class_dist_norm_vars(
     V: Tensor,
     M: Tensor,
     dist_exp: float = 1.0,
@@ -43,8 +43,7 @@ def class_dist_norm_var(
         M_diff_norm_sq = pt.sum(M_diff * M_diff, dim=-1)
         return var_avgs.squeeze(0) / (M_diff_norm_sq**dist_exp)
 
-    grid = tiling(bundled, kernel, tile_size)
-    return grid
+    return tiling(bundled, kernel, tile_size)
 
 
 def dist_kernel(data: Tensor, tile_size: int = None) -> Tensor:
@@ -55,7 +54,7 @@ def dist_kernel(data: Tensor, tile_size: int = None) -> Tensor:
         tile_size (int, optional): Size of the tile for kernel computation.
             Set tile_size << K to avoid OOM. Defaults to None.
     """
-    kernel = lambda tile_i, tile_j: tile_i.unsqueeze(1) - tile_j
+    kernel = lambda tile_i, tile_j: (tile_i.unsqueeze(1) - tile_j).norm(dim=-1)
     return tiling(data, kernel, tile_size)
 
 
