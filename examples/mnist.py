@@ -108,10 +108,11 @@ for epoch in range(n_epochs):
         covar_within = covar_accum.compute()
 
         dec_accum = DecAccumulator(10, 512, "cuda", M=means, W=model.fc.weight)
+        dec_accum.create_index(means)
         for i, (images, labels) in enumerate(test_loader):
             images, labels = images.to(device), labels.to(device)
             outputs = model(images)
-            dec_accum.accumulate(Features.value, labels, means, model.fc.weight)
+            dec_accum.accumulate(Features.value, labels, model.fc.weight)
 
         ood_mean_accum = MeanAccumulator(10, 512, "cuda")
         for i, (images, labels) in enumerate(ood_loader):
@@ -122,11 +123,11 @@ for epoch in range(n_epochs):
 
         # NC measurements
         results = {
-            "nc1_covariance_pinv": covariance_pinv(covar_within, means, mG, svd=True),
-            "nc1_covariance_ratio": covariance_ratio(covar_within, means, mG),
-            "nc1_variability_cdnv": variability_cdnv(var_norms, means),
+            "nc1_covariance_pinv": covariance_pinv(means, covar_within, mG, svd=True),
+            "nc1_covariance_ratio": covariance_ratio(means, covar_within, mG),
+            "nc1_variability_cdnv": variability_cdnv(means, var_norms),
             "nc2_simplex_etf_error": simplex_etf_error(means, mG),
-            "nc3_self_duality": self_duality_error(model.fc.weight, means, mG),
+            "nc3_self_duality": self_duality_error(means, model.fc.weight, mG),
             "nc4_decs_agreement": clf_ncc_agreement(dec_accum),
             "nc5_ood_deviation": orthogonality_deviation(means, mG_ood),
         }

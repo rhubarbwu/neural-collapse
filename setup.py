@@ -13,11 +13,13 @@ setup(
     url="https://github.com/rhubarbwu/neural-collapse",  # Link to your repository
     packages=find_packages(),  # Automatically find the 'matrix_operator' package
     install_requires=[
-        "faiss-gpu",
-        "numpy<2",
+        "numpy",
         "scipy",
         "torch",
     ],
+    extras_require={
+        "faiss": ["faiss-gpu", "numpy<2"],
+    },
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",

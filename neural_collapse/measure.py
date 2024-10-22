@@ -14,7 +14,7 @@ from .util import normalize, symm_reduce
 
 
 def covariance_pinv(
-    V_intra: Tensor, M: Tensor, m_G: Tensor = 0, svd: bool = False
+    M: Tensor, V_intra: Tensor, m_G: Tensor = 0, svd: bool = False
 ) -> float:
     """Compute within-class variability collapse: trace of the product
     between the within-class (intra) variance and pseudo-inverse of the
@@ -22,8 +22,8 @@ def covariance_pinv(
     Papyan et al. (2020): https://doi.org/10.1073/pnas.2015509117
 
     Arguments:
-        V_intra (Tensor): Matrix of within-class (co)variance.
         M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        V_intra (Tensor): Matrix of within-class (co)variance.
         m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
         svd (bool, optional): Whether to compute Moore-Penrose pseudo-inverse
             directly. Default is False, using torch.pinv.
@@ -44,15 +44,15 @@ def covariance_pinv(
     return pt.trace(ratio_prod).item() / K  # (1)
 
 
-def covariance_ratio(V_intra: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
+def covariance_ratio(M: Tensor, V_intra: Tensor, m_G: Tensor = 0) -> float:
     """Compute the ratio of traces of (co)variances: within-class (intra)
     variance to between-class (inter) variance.
     Hui et al. (2022): https://arxiv.org/abs/2202.08384
     Tirer et al. (2023): https://proceedings.mlr.press/v202/tirer23a
 
     Arguments:
-        V_intra (Tensor): Matrix of within-class (co)variance.
         M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        V_intra (Tensor): Matrix of within-class (co)variance.
         m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
 
     Returns:
@@ -65,15 +65,15 @@ def covariance_ratio(V_intra: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
 
 
 def variability_cdnv(
-    V: Tensor, M: Tensor, dist_exp: float = 1.0, tile_size: int = None
+    M: Tensor, V: Tensor, dist_exp: float = 1.0, tile_size: int = None
 ) -> float:
     """Compute the average class-distance normalized variances (CDNV).
     This metric reflects pairwise variability adjusted for mean distances.
     Galanti et al. (2021): https://arxiv.org/abs/2112.15121
 
     Arguments:
-        V (Tensor): Matrix of within-class variance norms for the classes.
         M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        V (Tensor): Matrix of within-class variance norms for the classes.
         dist_exp (int): The power with which to exponentiate the distance
             normalizer. A greater power further diminishes the contribution of
             mutual variability between already-disparate classes. Defaults to
@@ -122,14 +122,14 @@ def interference_grid(M: Tensor, m_G: Tensor = 0) -> Tensor:
     return pt.inner(M_centred, M_centred)  # (K,K)
 
 
-def similarities(W: Tensor, M: Tensor, m_G: Tensor = 0, cos: bool = False) -> Tensor:
+def similarities(M: Tensor, W: Tensor, m_G: Tensor = 0, cos: bool = False) -> Tensor:
     """Compute the (cosine or dot-product) similarities between a set of (mean)
     embeddings and classifiers vectors.
 
     Arguments:
+        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
         W (Tensor): Weight vectors of the classifiers. Computations will be
             performed on the device of W.
-        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
         m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
         cos (bool, optional): Whether to use cosine similarity. Defaults to
             False, using dot-product similarity.
@@ -144,13 +144,12 @@ def similarities(W: Tensor, M: Tensor, m_G: Tensor = 0, cos: bool = False) -> Te
 
 
 def distance_norms(W: Tensor, M: Tensor, m_G: Tensor = 0, norm: bool = True) -> Tensor:
-    """Compute the distance between a set of (mean) embeddings and classifiers
-    vectors.
+    """Compute the distance between (mean) embeddings and classifier vectors.
 
     Arguments:
+        M (Tensor): Feature (e.g. class mean) embeddings vectors.
         W (Tensor): Weight vectors of the classifiers. Computations will be
             performed on the device of W.
-        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
         m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
         norm (bool, optional): Whether to normalize vectors before taking
             their distances. Defaults to True, allowing two dual spaces.
@@ -164,9 +163,9 @@ def distance_norms(W: Tensor, M: Tensor, m_G: Tensor = 0, norm: bool = True) -> 
     return (W - M_centred).norm(dim=-1)
 
 
-def _structure_error(A: Tensor, B: Tensor) -> float:
-    """Compute the error between the cross-class coherence structure formed
-    by two sets of embeddings and the ideal simplex equiangular tight frame
+def structure_error(A: Tensor, B: Tensor) -> float:
+    """Compute the error between the cross-coherence structure formed
+    by two sets of vectors and the ideal simplex equiangular tight frame
     (ETF), expressed as the matrix norm of their difference.
     Kothapalli (2023): https://arxiv.org/abs/2206.04041
 
@@ -201,24 +200,24 @@ def simplex_etf_error(M: Tensor, m_G: Tensor = 0) -> float:
         float: Scalar error of excess incoherence from simplex ETF.
     """
     M_centred = M - m_G
-    return _structure_error(M_centred, M_centred)
+    return structure_error(M_centred, M_centred)
 
 
-def self_duality_error(W: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
+def self_duality_error(M: Tensor, W: Tensor, m_G: Tensor = 0) -> float:
     """Compute the excess cross-class incoherence between a set of (mean)
     embeddings and classifiers, relative to the ideal simplex ETF.
     Kothapalli (2023): https://arxiv.org/abs/2206.04041
 
     Arguments:
-        W (Tensor): Weight vectors of the classifiers.
         M (Tensor): Matrix of feature (e.g. class mean) embeddings.
+        W (Tensor): Weight vectors of the classifiers.
         m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
 
     Returns:
         float: Scalar error of excess incoherence from simplex ETF.
     """
     M_centred = M - m_G
-    return _structure_error(M_centred, W)
+    return structure_error(M_centred, W)
 
 
 def clf_ncc_agreement(

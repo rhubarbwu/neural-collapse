@@ -2,7 +2,6 @@ from abc import ABCMeta, abstractmethod
 from typing import List, Tuple, Union
 
 import torch as pt
-from faiss import IndexFlatL2
 from torch import Tensor
 
 from .util import hashify, resolve
@@ -210,7 +209,7 @@ class DecAccumulator(Accumulator):
     Methods:
         create_index(M):
             Initializes a FAISS index with the provided mean vectors.
-        accumulate(X, Y, M, W):
+        accumulate(X, Y, W, M=None):
             Updates the totals based on hits between the nearest-class center
             and linear classifiers.
         compute(idxs=None, weighted=True):
@@ -228,25 +227,37 @@ class DecAccumulator(Accumulator):
         self.hash_M = resolve(self.hash_M, hashify(M))
         assert self.hash_M
 
-        self.index = IndexFlatL2(self.d_vectors)
-        self.index.add(M.cpu().numpy())
+        try:
+            from faiss import IndexFlatL2
+
+            self.index = IndexFlatL2(self.d_vectors)
+            self.index.add(M.cpu().numpy())
+        except:
+            print("W: FAISS either not installed or couldn't create index!")
 
     def accumulate(
-        self, X: Tensor, Y: Tensor, M: Tensor, W: Tensor
+        self,
+        X: Tensor,
+        Y: Tensor,
+        W: Tensor,
+        M: Tensor = None,
     ) -> Tuple[Tensor, Tensor]:
-        self.hash_M = resolve(self.hash_M, hashify(M))
-        self.hash_W = resolve(self.hash_W, hashify(W))
-        assert self.hash_M and self.hash_W
 
-        X = X.to(self.device, self.dtype)
-        M, W = M.to(self.device, self.dtype), W.to(self.device, self.dtype)
-        assert M.shape == W.shape == (self.n_classes, self.d_vectors)
+        self.hash_W = resolve(self.hash_W, hashify(W))
+        assert self.hash_W
+        assert W.shape == (self.n_classes, self.d_vectors)
+        X, W = X.to(self.device, self.dtype), W.to(self.device, self.dtype)
 
         # NCC classifier decisions
-        if self.index:  # fast branch, using FAISS index
+        if self.index:  # using FAISS index
             _, I = self.index.search(X.cpu().numpy(), 1)
             Y_ncc = pt.tensor(I).to(self.device).squeeze()  # (B)
-        else:
+        else:  # manual near-class centre, using given means
+            self.hash_M = resolve(self.hash_M, hashify(M))
+            assert self.hash_M
+            assert M.shape == (self.n_classes, self.d_vectors)
+            M = M.to(self.device, self.dtype)
+
             dots = pt.inner(X, M)  # (B,K)
             feats, centre = pt.norm(X, dim=-1) ** 2, pt.norm(M, dim=-1) ** 2  # (B), (K)
             dists = feats.unsqueeze(1) + centre.unsqueeze(0) - 2 * dots  # (B,K)

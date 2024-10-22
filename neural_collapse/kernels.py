@@ -55,7 +55,7 @@ def dist_kernel(data: Tensor, tile_size: int = None) -> Tensor:
         tile_size (int, optional): Size of the tile for kernel computation.
             Set tile_size << K to avoid OOM. Defaults to None.
     """
-    kernel = lambda tile_i, tile_j: tile_i.unsqueeze(1) - tile_j
+    kernel = lambda tile_i, tile_j: (tile_i.unsqueeze(1) - tile_j).norm(dim=-1)
     return tiling(data, kernel, tile_size)
 
 
