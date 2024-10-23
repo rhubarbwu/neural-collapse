@@ -1,5 +1,15 @@
 # Neural Collapse
 
+This package aims to be a reference implementation for the analysis of
+[Neural Collapse (NC) (Papyan et al., 2020)](https://www.pnas.org/doi/full/10.1073/pnas.2015509117).
+We provide,
+
+1. Accumulators to collect embeddings from output representations from your
+   pre-trained model.
+2. Measurement (kernel) functions for several canonical and modern NC metrics.
+3. Tiling support for memory-bound settings arising from large embeddings,
+   many classes and/or limited parallel accelerator (e.g. GPU) memory.
+
 ## Installation
 
 ```sh
@@ -7,76 +17,100 @@
 pip install git+https://github.com/rhubarbwu/neural-collapse.git
 
 # with FAISS
-pip install git+https://github.com/username/neural-collapse.git#egg=neural_collapse[faiss]
+pip install git+https://github.com/rhubarbwu/neural-collapse.git#egg=neural_collapse[faiss]
 
-# install locally [with faiss]
-pip install -e .[faiss]
+# install locally from a repository clone [with FAISS]
+git clone https://github.com/rhubarbwu/neural-collapse.git
+pip install -e neural-collapse[faiss]
 ```
 
-## Import
+## Usage
 
 ```py
 import neural_collapse as nc
 ```
 
-## Usage
+We assume that you,
 
-We assume that, you,
+- Already pre-trained your model or are in the training process with a
+  programmable loop, where the top-layer classifier weights are available.
+- Have your iterable dataloader(s) available. Make sure your training data is
+  the same as that with which you trained your model.
+- Have model evaluation functions or results; technically optional but ideal.
 
-- Already trained your model or are in the process with a programmable loop,
-  where the top-layer classifier weights are available.
-- Have your iterable dataloader(s) available.
-- Have model evaluation functions or results; technically optional but ideal to have.
+For use cases with large embeddings or many classes, we recommend using a
+hardware accelerator (e.g. `cuda`).
 
 ### Accumulators
 
-Firstly, you'll need to accumulate the,
-
-1. Class-mean embeddings from the train set.
-2. Within-class covariances or variance norms from the train set.
-3. Decision agreement from unseen data (validation and/or test).
-
-Here's our snippet for an [example on the MNIST dataset](./examples/mnist.py).
+You'll need to collect (e.g. "accumulate") statistics from you learned
+representations. Here we outline a
+[basic example on the MNIST dataset](./examples/mnist.py) with `K=10`
+classes and embeddings of size `D=512`.
 
 ```py
 from neural_collapse.accumulate import (CovarAccumulator, DecAccumulator,
                                         MeanAccumulator, VarNormAccumulator)
+```
 
+#### Mean Embedding Accumulators (for NC\* in general)
+
+```py
 mean_accum = MeanAccumulator(10, 512, "cuda")
 for i, (images, labels) in enumerate(train_loader):
     images, labels = images.to(device), labels.to(device)
     outputs = model(images)
     mean_accum.accumulate(Features.value, labels)
 means, mG = mean_accum.compute()
+```
 
-var_norms_accum = VarNormAccumulator(10, 512, "cuda", M=means) # for CDNV
+#### Variance Accumulators (for NC1)
+
+For measuring within-class variability collapse (NC1), you would typically
+collect within-class covariances (`covar_accum` below); note that this might
+be memory-intensive at order `K*D*D`.
+
+```py
 covar_accum = CovarAccumulator(10, 512, "cuda", M=means)
+var_norms_accum = VarNormAccumulator(10, 512, "cuda", M=means) # for CDNV
 for i, (images, labels) in enumerate(train_loader):
     images, labels = images.to(device), labels.to(device)
     outputs = model(images)
-    var_norms_accum.accumulate(Features.value, labels, means)
     covar_accum.accumulate(Features.value, labels, means)
-var_norms, _ = var_norms_accum.compute() # for CDNV
+    var_norms_accum.accumulate(Features.value, labels, means)
 covar_within = covar_accum.compute()
+var_norms, _ = var_norms_accum.compute() # for CDNV
+```
 
-dec_accum = DecAccumulator(10, 512, "cuda", M=means, W=model.fc.weight)
-dec_accum.create_index(means) # index makes means unnecessary in accumulation
+NC1 can also be empirically measured using the class-distance normalized
+variance [(CDNV) (Galanti et. al, 2021)](https://arxiv.org/abs/2112.15121),
+which only requires collecting within-class variance norms at order `K`.
+
+#### Decision Agreement Accumulators (for NC4)
+
+Measuring the convergence of the linear classifier's behaviour to that of the
+implicit near-class centre (NCC) classifier has since been extended to
+generalizing to unseen (e.g. validation or test) data.
+
+```py
+dec_accum = DecAccumulator(10, 512, "cuda", M=means, W=weights)
+dec_accum.create_index(means) # optionally use FAISS index for NCC
 for i, (images, labels) in enumerate(test_loader):
     images, labels = images.to(device), labels.to(device)
     outputs = model(images)
-    dec_accum.accumulate(Features.value, labels, model.fc.weight)
+
+    # mean embeddings (only) necessary again if not using FAISS index
+    if dec_accum.index is None:
+        dec_accum.accumulate(Features.value, labels, weights, means)
+    else:
+        dec_accum.accumulate(Features.value, labels, weights)
 ```
 
-#### Class-Distance Normalized Variance (CDNV)
+#### Out-of-Distribution (OoD) Means (for NC5)
 
-NC1 can also be empirically measured by the
-[CDNV (Galanti et. al, 2021)](https://arxiv.org/abs/2112.15121)
-based on the variance norms from the second pass over the train set.
-
-#### Out-of-Distribution (OoD) Means
-
-Optionally, collect class-mean embeddings from an out-of-distribution dataset
-[NC5 (Ammar et al., 2024)](https://arxiv.org/abs/2310.06823).
+For OoD detection
+[(NC5) (Ammar et al., 2024)](https://arxiv.org/abs/2310.06823), collect
+class-mean embeddings from an out-of-distribution dataset for OoD detection.
 
 ```py
 ood_mean_accum = MeanAccumulator(10, 512, "cuda")
@@ -92,32 +126,68 @@ _, mG_ood = ood_mean_accum.compute()
 Here's our snippet for an [example on the MNIST dataset](./examples/mnist.py).
 
 ```py
+from neural_collapse.measure import (clf_ncc_agreement, covariance_pinv,
+                                     covariance_ratio, orthogonality_deviation,
+                                     self_duality_error, simplex_etf_error,
+                                     variability_cdnv)
+
 results = {
-    "nc1_covariance_pinv": covariance_pinv(means, covar_within, mG, svd=True),
-    "nc1_covariance_ratio": covariance_ratio(means, covar_within, mG),
-    "nc1_variability_cdnv": variability_cdnv(means, var_norms),
+    "nc1_covar_pinv": covariance_pinv(means, covar_within, mG, svd=True),
+    "nc1_covar_ratio": covariance_ratio(means, covar_within, mG),
+    "nc1_varnorm_cdnv": variability_cdnv(means, var_norms),
     "nc2_simplex_etf_error": simplex_etf_error(means, mG),
-    "nc3_self_duality": self_duality_error(means, model.fc.weight, mG),
+    "nc2g_distnorms": kernel_stats(means, mG)[1],
+    "nc2g_lognorms": kernel_stats(means, mG, kernel=log_kernel)[1],
+    "nc3_self_duality": self_duality_error(means, weights, mG),
+    "nc3u_uniform_duality": similarities(means, weights, mG).var().item(),
     "nc4_decs_agreement": clf_ncc_agreement(dec_accum),
     "nc5_ood_deviation": orthogonality_deviation(means, mG_ood),
 }
 ```
 
-Where centring is required for `means`, you can pre-centre them or include the global mean `mG` as a bias argument, up to you!
+#### Pre-Centring Means
+
+Where centring is required for `means`, you can include the global mean `mG`
+as a bias argument (as above), or pre-centre them (as below).
 
 ```py
 means_centred = means - mG
 results = {
-    "nc1_covariance_pinv": covariance_pinv(means_centred, covar_within, svd=True),
-    "nc1_covariance_ratio": covariance_ratio(means_centred, covar_within),
-    "nc1_variability_cdnv": variability_cdnv(means, var_norms),
-    "nc2_simplex_etf_error": simplex_etf_error(means_centred),
-    "nc3_self_duality": self_duality_error(means_centred, model.fc.weight),
-    "nc4_decs_agreement": clf_ncc_agreement(dec_accum),
+    "nc1_covar_pinv": covariance_pinv(means_centred, covar_within, svd=True),
+    "nc1_covar_ratio": covariance_ratio(means_centred, covar_within),
+    "nc1_varnorm_cdnv": variability_cdnv(means, var_norms),
+    # ...
     "nc5_ood_deviation": orthogonality_deviation(means, mG_ood),
 }
 ```
 
+Note that since the uncentred means are still needed for some measurements
+(such as CDNV) (and therefore cannot be discarded), storing pre-centred means
+may not be economical memory-wise if `K` and/or `D` are large.
+
+#### Tiling & Reductions
+
+For many of the NC measurement functions, we implement kernel tiling if large
+embeddings or many classes are straining your hardware memory. You may want to
+tune the tile square size to maximize accelerator throughput.
+
+```py
+results = {
+    # ...
+    "nc1_varnorm_cdnv": variability_cdnv(means, var_norms, tile_size=64),
+    "nc2g_distnorms": kernel_stats(means, mG, tile_size=64)[1], # variance
+    "nc2g_lognorms": kernel_stats(means, mG, kernel=log_kernel, tile_size=64)[1], # variance
+    # ...
+}
+```
+
+After `kernel_grid` produces a symmetric measurement matrix, `kernel_stats`
+computes the mean `[0]` and variance `[1]` using triangle row folding.
+
+## Development
+
+This project is under active development. Feel free to open issues for bugs,
+features, optimizations, or papers you would like (us) to implement.
 
 ## References
 

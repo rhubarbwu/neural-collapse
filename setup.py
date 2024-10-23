@@ -7,7 +7,7 @@ setup(
     version="0.1",
     author="Robert Wu",
     author_email="rupert@cs.toronto.edu",
-    description="A generic library for accumulating feature statistics and computing neural collapse metrics.",
+    description="A generic library for accumulating feature statistics and computing neural collapse (NC) metrics.",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/rhubarbwu/neural-collapse",  # Link to your repository

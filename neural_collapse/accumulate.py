@@ -208,7 +208,8 @@ class DecAccumulator(Accumulator):
 
     Methods:
         create_index(M):
-            Initializes a FAISS index with the provided mean vectors.
+            Initializes a FAISS (if installed) index with the provided mean
+                vectors. If FAISS not found, do nothing.
         accumulate(X, Y, W, M=None):
             Updates the totals based on hits between the nearest-class center
             and linear classifiers.
@@ -233,7 +234,7 @@ class DecAccumulator(Accumulator):
             self.index = IndexFlatL2(self.d_vectors)
             self.index.add(M.cpu().numpy())
         except:
-            print("W: FAISS either not installed or couldn't create index!")
+            pass
 
     def accumulate(
         self,
@@ -269,4 +270,6 @@ class DecAccumulator(Accumulator):
         # count matches between classifiers
         matches = (Y_lin == Y_ncc).to(self.ctype)  # (B)
         self.class_idxs(X, Y)
-        self.totals.scatter_add_(0, Y.to(self.device), matches)
+        self.totals.scatter_add_(0, Y.to(self.device, pt.int64), matches)
+
+        return self.ns_samples, self.totals

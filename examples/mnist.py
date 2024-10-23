@@ -8,10 +8,11 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 
 from neural_collapse.accumulate import (CovarAccumulator, DecAccumulator,
                                         MeanAccumulator, VarNormAccumulator)
+from neural_collapse.kernels import kernel_stats, log_kernel
 from neural_collapse.measure import (clf_ncc_agreement, covariance_pinv,
                                      covariance_ratio, orthogonality_deviation,
-                                     self_duality_error, simplex_etf_error,
-                                     variability_cdnv)
+                                     self_duality_error, similarities,
+                                     simplex_etf_error, variability_cdnv)
 
 # Device configuration
 device = pt.device("cuda" if pt.cuda.is_available() else "cpu")
@@ -89,6 +90,8 @@ for epoch in range(n_epochs):
     with pt.no_grad():
         model.eval()
 
+        weights = model.fc.weight
+
         # NC collections
         mean_accum = MeanAccumulator(10, 512, "cuda")
         for i, (images, labels) in enumerate(train_loader):
@@ -107,12 +110,17 @@ for epoch in range(n_epochs):
         var_norms, _ = var_norms_accum.compute()
         covar_within = covar_accum.compute()
 
-        dec_accum = DecAccumulator(10, 512, "cuda", M=means, W=model.fc.weight)
-        dec_accum.create_index(means)
+        dec_accum = DecAccumulator(10, 512, "cuda", M=means, W=weights)
+        dec_accum.create_index(means)  # optionally use FAISS index for NCC
         for i, (images, labels) in enumerate(test_loader):
             images, labels = images.to(device), labels.to(device)
             outputs = model(images)
-            dec_accum.accumulate(Features.value, labels, model.fc.weight)
+
+            # mean embeddings (only) necessary again if not using FAISS index
+            if dec_accum.index is None:
+                dec_accum.accumulate(Features.value, labels, weights, means)
+            else:
+                dec_accum.accumulate(Features.value, labels, weights)
 
         ood_mean_accum = MeanAccumulator(10, 512, "cuda")
         for i, (images, labels) in enumerate(ood_loader):
@@ -123,11 +131,14 @@ for epoch in range(n_epochs):
 
         # NC measurements
         results = {
-            "nc1_covariance_pinv": covariance_pinv(means, covar_within, mG, svd=True),
-            "nc1_covariance_ratio": covariance_ratio(means, covar_within, mG),
-            "nc1_variability_cdnv": variability_cdnv(means, var_norms),
-            "nc2_simplex_etf_error": simplex_etf_error(means, mG),
-            "nc3_self_duality": self_duality_error(means, model.fc.weight, mG),
+            "nc1_covar_pinv": covariance_pinv(means, covar_within, mG, svd=True),
+            "nc1_covar_ratio": covariance_ratio(means, covar_within, mG),
+            "nc1_varnorm_cdnv": variability_cdnv(means, var_norms, tile_size=64),
+            "nc2_simplex_etf_error": simplex_etf_error(means),
+            "nc2g_distnorms": kernel_stats(means, tile_size=64)[1],
+            "nc2g_lognorms": kernel_stats(means, kernel=log_kernel, tile_size=64)[1],
+            "nc3_self_duality": self_duality_error(means, weights, mG),
+            "nc3u_uniform_duality": similarities(means, weights, mG).var().item(),
             "nc4_decs_agreement": clf_ncc_agreement(dec_accum),
             "nc5_ood_deviation": orthogonality_deviation(means, mG_ood),
         }
