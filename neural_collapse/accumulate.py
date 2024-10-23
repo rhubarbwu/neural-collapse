@@ -269,4 +269,6 @@ class DecAccumulator(Accumulator):
         # count matches between classifiers
         matches = (Y_lin == Y_ncc).to(self.ctype)  # (B)
         self.class_idxs(X, Y)
-        self.totals.scatter_add_(0, Y.to(self.device), matches)
+        self.totals.scatter_add_(0, Y.to(self.device, pt.int64), matches)
+        
+        return self.ns_samples, self.totals
