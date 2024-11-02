@@ -132,14 +132,14 @@ from neural_collapse.measure import (clf_ncc_agreement, covariance_pinv,
                                      variability_cdnv)
 
 results = {
-    "nc1_pinv": covariance_pinv(covar_within, means, mG, svd=True),
-    "nc1_svd": covariance_pinv(covar_within, means, mG, svd=True),
-    "nc1_quot": covariance_ratio(covar_within, means, mG),
+    "nc1_pinv": covariance_ratio(covar_within, means, mG),
+    "nc1_svd": covariance_ratio(covar_within, means, mG, "svd"),
+    "nc1_quot": covariance_ratio(covar_within, means, mG, "quotient"),
     "nc1_cdnv": variability_cdnv(var_norms, means),
     "nc2_etf_err": simplex_etf_error(means, mG),
     "nc2g_dist": kernel_stats(means, mG)[1],
     "nc2g_log": kernel_stats(means, mG, kernel=log_kernel)[1],
-    "nc3_self_dual": self_duality_error(weights, means, mG),
+    "nc3_dual_err": self_duality_error(weights, means, mG),
     "nc3u_uni_dual": similarities(weights, means, mG).var().item(),
     "nc4_agree": clf_ncc_agreement(dec_accum),
     "nc5_ood_dev": orthogonality_deviation(means, mG_ood),
@@ -154,9 +154,9 @@ as a bias argument (as above), or pre-centre them (as below).
 ```py
 means_centred = means - mG
 results = {
-    "nc1_pinv": covariance_pinv(covar_within, means_centred),
-    "nc1_svd": covariance_pinv(covar_within, means_centred, svd=True),
-    "nc1_quot": covariance_ratio(covar_within, means_centred),
+    "nc1_pinv": covariance_ratio(covar_within, means_centred),
+    "nc1_svd": covariance_ratio(covar_within, means_centred, metric="svd"),
+    "nc1_quot": covariance_ratio(covar_within, means_centred, metric="quotient"),
     "nc1_cdnv": variability_cdnv(var_norms, means),
     # ...
     "nc5_ood_dev": orthogonality_deviation(means, mG_ood),

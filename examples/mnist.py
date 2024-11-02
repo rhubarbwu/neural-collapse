@@ -5,8 +5,8 @@ import torchvision.models as models
 from neural_collapse.accumulate import (CovarAccumulator, DecAccumulator,
                                         MeanAccumulator, VarNormAccumulator)
 from neural_collapse.kernels import kernel_stats, log_kernel
-from neural_collapse.measure import (clf_ncc_agreement, covariance_pinv,
-                                     covariance_ratio, orthogonality_deviation,
+from neural_collapse.measure import (clf_ncc_agreement, covariance_ratio,
+                                     orthogonality_deviation,
                                      self_duality_error, similarities,
                                      simplex_etf_error, variability_cdnv)
 from torch.utils.data import DataLoader
@@ -129,14 +129,14 @@ for epoch in range(n_epochs):
 
         # NC measurements
         results = {
-            "nc1_pinv": covariance_pinv(covar_within, means, mG),
-            "nc1_svd": covariance_pinv(covar_within, means, mG, svd=True),
-            "nc1_quot": covariance_ratio(covar_within, means, mG),
+            "nc1_pinv": covariance_ratio(covar_within, means, mG),
+            "nc1_svd": covariance_ratio(covar_within, means, mG, "svd"),
+            "nc1_quot": covariance_ratio(covar_within, means, mG, "quotient"),
             "nc1_cdnv": variability_cdnv(var_norms, means, tile_size=64),
             "nc2_etf_err": simplex_etf_error(means, mG),
             "nc2g_dist": kernel_stats(means, mG, tile_size=64)[1],
             "nc2g_log": kernel_stats(means, mG, kernel=log_kernel, tile_size=64)[1],
-            "nc3_self_dual": self_duality_error(weights, means, mG),
+            "nc3_dual_err": self_duality_error(weights, means, mG),
             "nc3u_uni_dual": similarities(weights, means, mG).var().item(),
             "nc4_agree": clf_ncc_agreement(dec_accum),
             "nc5_ood_dev": orthogonality_deviation(means, mG_ood),

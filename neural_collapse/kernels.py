@@ -8,7 +8,7 @@ from .util import normalize, symm_reduce, tiling
 
 
 def class_dist_norm_vars(
-    V: Tensor,
+    V_norms: Tensor,
     M: Tensor,
     dist_exp: float = 1.0,
     tile_size: int = None,
@@ -18,7 +18,7 @@ def class_dist_norm_vars(
     Galanti et al. (2021): https://arxiv.org/abs/2112.15121
 
     Arguments:
-        V (Tensor): Matrix of within-class variance norms.
+        V_norms (Tensor): Matrix of within-class variance norms.
         M (Tensor): Matrix of feature (or class mean) embeddings.
         dist_exp (int): Power with which to exponentiate the distance
             normalizer. A greater power further diminishes the contribution of
@@ -30,8 +30,8 @@ def class_dist_norm_vars(
     Returns:
         Tensor: A tensor representing the matrix grid of pairwise CDNVs.
     """
-    V = V.view(-1, 1)
-    bundled = pt.cat((M, V), dim=1)
+    V_norms = V_norms.view(-1, 1)
+    bundled = pt.cat((M, V_norms), dim=1)
 
     def kernel(tile_i, tile_j):
         vars_i, vars_j = tile_i[:, -1], tile_j[:, -1]

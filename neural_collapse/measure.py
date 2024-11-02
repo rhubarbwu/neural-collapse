@@ -13,66 +13,56 @@ from .kernels import class_dist_norm_vars
 from .util import normalize, symm_reduce
 
 
-def covariance_pinv(
-    V_intra: Tensor, M: Tensor, m_G: Tensor = 0, svd: bool = False
+def covariance_ratio(
+    V_intra: Tensor, M: Tensor, m_G: Tensor = 0, metric: str = "pinv"
 ) -> float:
-    """Compute within-class variability collapse: trace of the product
-    between the within-class (intra) variance and pseudo-inverse of the
-    between-class (inter) variance.
-    Papyan et al. (2020): https://doi.org/10.1073/pnas.2015509117
+    """Compute the ratio between the within-class (intra) and between-class
+    (inter) covariances, using some empirical metric.
+    Papyan et al. (2020): https://doi.org/10.1073/pnas.2015509117;
+    Han et al. (2022): https://arxiv.org/abs/2106.02073;
+    Tirer et al. (2023): https://proceedings.mlr.press/v202/tirer23a;
 
     Arguments:
-        V_intra (Tensor): Matrix of within-class (co)variance.
+        V_intra (Tensor): Matrix of within-class covariance.
         M (Tensor): Matrix of feature (e.g. class mean) embeddings.
         m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
-        svd (bool, optional): Whether to compute Moore-Penrose pseudo-inverse
-            directly. Default is False, using torch.pinv.
+        metric (str, optional): Empirical metric for within-class variability.
+            Defaults to "pinv" for trace of the MP pseudoinverse left-product;
+            "svd" approximates the pinv left-product with SVD (top-K);
+            "quotient" computes the quotient of traces of covariances;
 
     Returns:
-        float: Product trace of between-class/within-class (co)variances.
+        float: Ratio of between-class/within-class covariances.
     """
-    (K, D), M_centred = M.shape, M - m_G
-    V_inter = M_centred.mT @ M_centred / D  # (D,D)
+    (K, _), M_centred = M.shape, M - m_G
+    V_inter = M_centred.mT @ M_centred / K
 
-    if svd:  # compute MP-inverse directly using SVD
+    if metric == "pinv":  # Papyan et al. (2020)
+        V_intra = V_intra.to(V_inter.device)
+        prod = la.pinv(V_inter) @ V_intra
+        return pt.trace(prod).item() / K
+
+    if metric == "svd":  # Han et al. (2022)
         V_intra, V_inter = V_intra.cpu().numpy(), V_inter.cpu().numpy()
         eig_vecs, eig_vals, _ = svds(V_inter, k=K - 1)
-        inv_Sb = eig_vecs @ np.diag(eig_vals ** (-1)) @ eig_vecs.T  # (D,D)
-        return float(np.trace(V_intra @ inv_Sb))
+        inv_Sb = eig_vecs @ np.diag(eig_vals ** (-1)) @ eig_vecs.T
+        return float(np.trace(V_intra @ inv_Sb)) / K
 
-    ratio_prod = la.pinv(V_inter) @ V_intra.to(V_inter.device)  # (D,D)
-    return pt.trace(ratio_prod).item() / K  # (1)
+    if metric == "quotient":  # Tirer et al. (2023)
+        return pt.trace(V_intra).item() / pt.trace(V_inter).item()
 
-
-def covariance_ratio(V_intra: Tensor, M: Tensor, m_G: Tensor = 0) -> float:
-    """Compute the ratio of traces of (co)variances: within-class (intra)
-    variance to between-class (inter) variance.
-    Hui et al. (2022): https://arxiv.org/abs/2202.08384
-    Tirer et al. (2023): https://proceedings.mlr.press/v202/tirer23a
-
-    Arguments:
-        V_intra (Tensor): Matrix of within-class (co)variance.
-        M (Tensor): Matrix of feature (e.g. class mean) embeddings.
-        m_G (Tensor, optional): Bias (e.g. global mean) vector. Defaults to 0.
-
-    Returns:
-        float: Ratio of traces of between-class/within-class (co)variances.
-    """
-    (_, D), M_centred = M.shape, M - m_G
-    V_inter = M_centred.mT @ M_centred / D  # (D,D)
-    ratio = pt.trace(V_intra) / pt.trace(V_inter)
-    return ratio.item()
+    raise NotImplementedError
 
 
 def variability_cdnv(
-    V: Tensor, M: Tensor, dist_exp: float = 1.0, tile_size: int = None
+    V_norms: Tensor, M: Tensor, dist_exp: float = 1.0, tile_size: int = None
 ) -> float:
     """Compute the average class-distance normalized variances (CDNV).
     This metric reflects pairwise variability adjusted for mean distances.
-    Galanti et al. (2021): https://arxiv.org/abs/2112.15121
+    Galanti et al. (2021): https://arxiv.org/abs/2112.15121;
 
     Arguments:
-        V (Tensor): Matrix of within-class variance norms for the classes.
+        V_norms (Tensor): Matrix of within-class variance norms for the classes.
         M (Tensor): Matrix of feature (e.g. class mean) embeddings.
         dist_exp (int): The power with which to exponentiate the distance
             normalizer. A greater power further diminishes the contribution of
@@ -84,7 +74,7 @@ def variability_cdnv(
     Returns:
         float: The average CDNVs across all class pairs.
     """
-    kernel_grid = class_dist_norm_vars(V, M, dist_exp, tile_size)
+    kernel_grid = class_dist_norm_vars(V_norms, M, dist_exp, tile_size)
     avg = symm_reduce(kernel_grid, pt.sum)
     return avg.item()
 
@@ -244,7 +234,7 @@ def clf_ncc_agreement(
 def orthogonality_deviation(M: Tensor, m_G_ood: Tensor = 0) -> float:
     """Compute the average normalized deviation of means from the global mean
     embedding from out-of-distribution (OoD) data.
-    Ammar et al. (2024): https://arxiv.org/abs/2310.06823
+    Ammar et al. (2024): https://arxiv.org/abs/2310.06823;
 
     Arguments:
         M (Tensor): Matrix of feature (e.g. class mean) embeddings.
