@@ -1,3 +1,6 @@
+import copy
+import numpy as np
+import matplotlib.pyplot as plt
 import torch as pt
 import torch.nn as nn
 import torch.optim as optim
@@ -115,8 +118,13 @@ optimizer = optim.SGD(model.parameters(), lr, momentum, weight_decay=weight_deca
 lr_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, epochs_lr_decay, lr_decay)
 
 
-wandb.init(project="neural-collapse")
+try:
+    import wandb
 
+    wandb.init(project="neural-collapse")
+    WANDB = True
+except:
+    WANDB = False
 
 with pt.no_grad():
     latents = model(pt.ones(1, 1, 28, 28).cuda())[-1]
@@ -201,6 +209,7 @@ for epoch in range(n_epochs):
 
         # NC measurements
 
+        layerwise_metrics = []
         for i in range(len(latents)):
             means, mG = mean_stats[i]
             covar_within = covars_within[i]
@@ -216,12 +225,36 @@ for epoch in range(n_epochs):
                 "nc2_simplex_etf_error": simplex_etf_error(means, mG),
                 "nc5_ood_deviation": orthogonality_deviation(means, mG_ood),
             }
+
+            layerwise_metrics.append(copy.deepcopy(results))
             if i == (len(latents) - 1):
                 results["nc4_decs_agreement"] = clf_ncc_agreement(dec_accum)
                 results["nc3_self_duality"] = self_duality_error(
                     means, model.features[-1].weight, mG
                 )
 
-            wandb.log({f"layer {i + 1}/{k}": v for k, v in results.items()})
+            if WANDB:
+                wandb.log({f"layer {i + 1}/{k}": v for k, v in results.items()})
 
+
+# Plot layerwise plots
+if WANDB:
+    for k, _ in layerwise_metrics[0].items():
+
+        vals = []
+        for metrics in layerwise_metrics:
+            vals.append(np.log(metrics[k]))
+
+        data = [[x, y] for x, y in zip(list(range(1, len(layerwise_metrics) + 1)), vals)]
+
+        f, ax = plt.subplots(1, 1)
+        ax.set_xlabel("Layer", fontsize=14)
+        ax.set_xticks(np.arange(1, len(layerwise_metrics) + 1, dtype=np.int8))
+        ax.plot(list(range(1, len(layerwise_metrics) + 1)), vals)
+
+        wandb.log(
+            {
+                f"layerwise_plots/{k}": f,
+            },
+        )
 pt.save(model.state_dict(), "collapsed_network.pt")
