@@ -191,6 +191,22 @@ computes the mean (`[0]`) and variance (`[1]`) using triangle row folding.
 This project is under active development. Feel free to open issues for bugs,
 features, optimizations, or papers you would like (us) to implement.
 
+## Citation
+
+As most of the code is taken from the [linguistic-collapse](https://github.com/rhubarbwu/linguistic-collapse) repository, we ask that you cite that paper if you use this code.
+
+```tex
+@misc{wu2024linguisticcollapse,
+      title={Linguistic Collapse: Neural Collapse in (Large) Language Models},
+      author={Robert Wu and Vardan Papyan},
+      year={2024},
+      eprint={2405.17767},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2405.17767},
+}
+```
+
 ## References
 
 - [Prevalence of neural collapse during the terminal phase of deep learning training](https://www.pnas.org/doi/full/10.1073/pnas.2015509117)
