@@ -16,7 +16,7 @@ We provide,
 # install from remote
 pip install git+https://github.com/rhubarbwu/neural-collapse.git
 
-# with FAISS
+# install with FAISS
 pip install git+https://github.com/rhubarbwu/neural-collapse.git#egg=neural_collapse[faiss]
 
 # install locally from a repository clone [with FAISS]
@@ -43,7 +43,7 @@ hardware accelerator (e.g. `cuda`).
 
 ### Accumulators
 
-You'll need to collect (e.g. "accumulate") statistics from you learned
+You'll need to collect (e.g. "accumulate") statistics from your learned
 representations. Here we outline a
 [basic example on the MNIST dataset](./examples/mnist.py) with `K=10`
 classes and embeddings of size `D=512`.
@@ -123,7 +123,7 @@ _, mG_ood = ood_mean_accum.compute()
 
 ### Measurements
 
-Here's our snippet for an [example on the MNIST dataset](./examples/mnist.py).
+Here's a snippet from our [example on the MNIST dataset](./examples/mnist.py).
 
 ```py
 from neural_collapse.measure import (clf_ncc_agreement, covariance_pinv,
@@ -190,6 +190,24 @@ computes the mean (`[0]`) and variance (`[1]`) using triangle row folding.
 
 This project is under active development. Feel free to open issues for bugs,
 features, optimizations, or papers you would like (us) to implement.
+
+## Citation
+
+As most of the code is taken from the [linguistic-collapse](https://github.com/rhubarbwu/linguistic-collapse) repository, we ask that you cite that paper if you use this code.
+
+```tex
+@inproceedings{NEURIPS2024_f88cc893,
+    author = {Wu, Robert and Papyan, Vardan},
+    booktitle = {Advances in Neural Information Processing Systems},
+    editor = {A. Globerson and L. Mackey and D. Belgrave and A. Fan and U. Paquet and J. Tomczak and C. Zhang},
+    pages = {137432--137473},
+    publisher = {Curran Associates, Inc.},
+    title = {Linguistic Collapse: Neural Collapse in (Large) Language Models},
+    url = {https://proceedings.neurips.cc/paper_files/paper/2024/file/f88cc8930b47a45ec4733123bf3039b9-Paper-Conference.pdf},
+    volume = {37},
+    year = {2024}
+}
+```
 
 ## References
 
